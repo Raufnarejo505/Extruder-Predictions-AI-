@@ -1556,6 +1556,17 @@ async def get_current_dashboard_data(
         state_message = state_display_names.get(machine_state_str, f"Machine is in {machine_state_str} state")
         explanation_text = f"{state_message}. Process evaluation is disabled. Evaluation only runs during PRODUCTION."
         
+        # Calculate spread_status for Temp_Spread even in non-PRODUCTION states
+        spread_status = "unknown"
+        temp_spread_value = metrics_response.get("Temp_Spread", {}).get("current_value")
+        if temp_spread_value is not None:
+            if temp_spread_value <= 5.0:
+                spread_status = "green"
+            elif temp_spread_value <= 8.0:
+                spread_status = "orange"
+            else:
+                spread_status = "red"
+        
         return {
             "machine_state": machine_state_str,
             "state_confidence": state_confidence,
@@ -1566,6 +1577,7 @@ async def get_current_dashboard_data(
             "explanation_text": explanation_text,
             "baseline_status": baseline_status,
             "profile_status": profile_status,
+            "spread_status": spread_status,  # Temp_Spread status for all states
         }
     
     # PRODUCTION state: Get full evaluation data from /extruder/derived

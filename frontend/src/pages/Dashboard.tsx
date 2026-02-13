@@ -6,7 +6,7 @@ import { DashboardSkeleton } from '../components/LoadingSkeleton';
 import { useT } from '../i18n/I18nProvider';
 import { SensorChart } from '../components/SensorChart';
 
-const gradientClass = "min-h-screen bg-[#f7f5ff] text-slate-900";
+const gradientClass = "min-h-screen bg-gradient-to-br from-slate-50 via-purple-50/30 to-slate-50 text-slate-900";
 const REFRESH_INTERVAL = 3000; // 3 seconds refresh interval
 const MIN_FETCH_INTERVAL = 2000; // Minimum time between fetches (throttling)
 
@@ -223,99 +223,134 @@ export default function Dashboard() {
       <BackendOnlineBanner />
       <div className="max-w-[1920px] mx-auto px-6 py-6">
         {/* Top Header Section */}
-        <div className="mb-6">
-          <div className="flex justify-between items-start mb-4">
+        <div className="mb-8">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900 mb-2">
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-slate-900 via-purple-800 to-slate-900 bg-clip-text text-transparent mb-2">
                 Extruder Überwachungsdashboard
               </h1>
-              <p className="text-slate-600 text-sm">
+              <p className="text-slate-600 text-base font-medium">
                 Predictive Maintenance für Kunststoffextrusion
               </p>
             </div>
           </div>
           
           {/* Status Cards Row */}
-          <div className="flex gap-4 mb-4">
-            <div className="bg-white/90 border border-slate-200 rounded-lg px-4 py-2 shadow-sm">
-              <span className="text-xs text-slate-500 font-medium">AI SERVICE</span>
-              <div className="text-slate-900 font-semibold">
+          <div className="flex flex-wrap gap-4">
+            <div className="bg-white/95 backdrop-blur-sm border border-slate-200/80 rounded-xl px-5 py-3 shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] flex-1 min-w-[180px]">
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full ${
+                  isFallback || !aiStatus ? 'bg-rose-500' : 
+                  (aiStatus.status === 'healthy' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500')
+                }`}></div>
+                <span className="text-xs text-slate-500 font-semibold uppercase tracking-wide">AI SERVICE</span>
+              </div>
+              <div className={`text-lg font-bold ${
+                isFallback || !aiStatus ? 'text-rose-600' : 
+                (aiStatus.status === 'healthy' ? 'text-emerald-600' : 'text-amber-600')
+              }`}>
                 {isFallback || !aiStatus ? 'Offline' : (aiStatus.status === 'healthy' ? 'Healthy' : 'Degraded')}
               </div>
             </div>
-            <div className="bg-white/90 border border-slate-200 rounded-lg px-4 py-2 shadow-sm">
-              <span className="text-xs text-slate-500 font-medium">MSSQL</span>
-              <div className="text-slate-900 font-semibold">
+            <div className="bg-white/95 backdrop-blur-sm border border-slate-200/80 rounded-xl px-5 py-3 shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] flex-1 min-w-[180px]">
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full ${
+                  !mssqlStatus ? 'bg-slate-400' :
+                  (!mssqlStatus.configured ? 'bg-amber-500' : 
+                  (mssqlStatus.last_error ? 'bg-rose-500' : 'bg-emerald-500 animate-pulse'))
+                }`}></div>
+                <span className="text-xs text-slate-500 font-semibold uppercase tracking-wide">MSSQL</span>
+              </div>
+              <div className={`text-lg font-bold ${
+                !mssqlStatus ? 'text-slate-600' :
+                (!mssqlStatus.configured ? 'text-amber-600' : 
+                (mssqlStatus.last_error ? 'text-rose-600' : 'text-emerald-600'))
+              }`}>
                 {!mssqlStatus
                   ? 'Unknown'
                   : (!mssqlStatus.configured ? 'Not Configured' : (mssqlStatus.last_error ? 'Error' : 'Connected'))}
               </div>
               {mssqlStatus?.last_error ? (
-                <div className="text-xs text-rose-700 mt-1 max-w-[260px] truncate" title={String(mssqlStatus.last_error)}>
+                <div className="text-xs text-rose-700 mt-2 max-w-[260px] truncate font-medium" title={String(mssqlStatus.last_error)}>
                   {String(mssqlStatus.last_error)}
                 </div>
               ) : null}
             </div>
-            <div className="bg-white/90 border border-slate-200 rounded-lg px-4 py-2 flex items-center gap-2 shadow-sm">
-              <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-              <div>
-                <span className="text-xs text-slate-500 font-medium">SYSTEM STATUS</span>
-                <div className="text-slate-900 font-semibold">All Systems Operational</div>
+            <div className="bg-white/95 backdrop-blur-sm border border-slate-200/80 rounded-xl px-5 py-3 shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] flex-1 min-w-[180px]">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                <span className="text-xs text-slate-500 font-semibold uppercase tracking-wide">SYSTEM STATUS</span>
               </div>
+              <div className="text-lg font-bold text-emerald-600">All Systems Operational</div>
             </div>
           </div>
         </div>
 
         {/* Machine State Display */}
-        <div className="bg-white/90 rounded-xl p-4 border border-slate-200 shadow-sm mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">Machine State</h3>
-              <div className="text-xs text-slate-500 mb-2">
-                <strong>State Definitions:</strong> OFF (Machine off/cold) | IDLE (Warm/ready) | HEATING (Warming up) | PRODUCTION (Process running) | COOLING (Cooling down)
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300 mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+            <div className="flex-1">
+              <h3 className="text-2xl font-bold text-slate-900 mb-2 flex items-center gap-2">
+                <span className="w-1 h-8 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+                Machine State
+              </h3>
+              <div className="text-sm text-slate-600 leading-relaxed">
+                <strong className="text-slate-800">State Definitions:</strong> OFF (Machine off/cold) | IDLE (Warm/ready) | HEATING (Warming up) | PRODUCTION (Process running) | COOLING (Cooling down)
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-sm font-medium text-slate-500 mb-1">Current State</div>
-              <div className={`text-2xl font-bold px-4 py-2 rounded-lg ${
-                machineState === 'PRODUCTION' ? 'bg-emerald-100 text-emerald-800' :
-                machineState === 'HEATING' ? 'bg-amber-100 text-amber-800' :
-                machineState === 'COOLING' ? 'bg-blue-100 text-blue-800' :
-                machineState === 'IDLE' ? 'bg-slate-100 text-slate-800' :
-                machineState === 'OFF' ? 'bg-red-100 text-red-800' :
-                'bg-gray-100 text-gray-800'
+            <div className="text-right lg:text-right">
+              <div className="text-sm font-semibold text-slate-500 mb-2 uppercase tracking-wide">Current State</div>
+              <div className={`inline-block text-3xl font-extrabold px-6 py-3 rounded-xl shadow-md transition-all duration-300 ${
+                machineState === 'PRODUCTION' ? 'bg-gradient-to-br from-emerald-100 to-emerald-200 text-emerald-800 border-2 border-emerald-300' :
+                machineState === 'HEATING' ? 'bg-gradient-to-br from-amber-100 to-amber-200 text-amber-800 border-2 border-amber-300' :
+                machineState === 'COOLING' ? 'bg-gradient-to-br from-blue-100 to-blue-200 text-blue-800 border-2 border-blue-300' :
+                machineState === 'IDLE' ? 'bg-gradient-to-br from-slate-100 to-slate-200 text-slate-800 border-2 border-slate-300' :
+                machineState === 'OFF' ? 'bg-gradient-to-br from-red-100 to-red-200 text-red-800 border-2 border-red-300' :
+                'bg-gradient-to-br from-gray-100 to-gray-200 text-gray-800 border-2 border-gray-300'
               }`}>
                 {machineState}
               </div>
-              <div className="text-xs text-slate-600 mt-1">
-                {machineState === 'PRODUCTION' && '🟢 Process active - Traffic light evaluation enabled'}
-                {machineState === 'HEATING' && '🔥 Warming up - Preparing for production'}
-                {machineState === 'COOLING' && '❄️ Cooling down - Post-production cycle'}
-                {machineState === 'IDLE' && '⏸️ Ready - Waiting for production start'}
-                {machineState === 'OFF' && '🔴 Machine off - No heating active'}
+              <div className="text-sm font-medium text-slate-700 mt-3 space-y-1">
+                {machineState === 'PRODUCTION' && <div className="flex items-center gap-2"><span className="text-emerald-600">🟢</span> Process active - Traffic light evaluation enabled</div>}
+                {machineState === 'HEATING' && <div className="flex items-center gap-2"><span className="text-amber-600">🔥</span> Warming up - Preparing for production</div>}
+                {machineState === 'COOLING' && <div className="flex items-center gap-2"><span className="text-blue-600">❄️</span> Cooling down - Post-production cycle</div>}
+                {machineState === 'IDLE' && <div className="flex items-center gap-2"><span className="text-slate-600">⏸️</span> Ready - Waiting for production start</div>}
+                {machineState === 'OFF' && <div className="flex items-center gap-2"><span className="text-red-600">🔴</span> Machine off - No heating active</div>}
               </div>
               {/* Learning Mode Indicator */}
               {currentDashboardData?.baseline_status === 'learning' && (
-                <div className="mt-2 px-3 py-1.5 bg-blue-100 border border-blue-300 rounded-md">
-                  <div className="text-xs font-medium text-blue-800">
-                    📚 Baseline Learning Mode Active - Alarms Disabled
+                <div className="mt-3 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm">
+                  <div className="text-sm font-semibold text-blue-800 flex items-center gap-2">
+                    <span>📚</span> Baseline Learning Mode Active - Alarms Disabled
                   </div>
                 </div>
               )}
               {/* Baseline Status */}
               {currentDashboardData?.baseline_status && currentDashboardData.baseline_status !== 'learning' && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Baseline: {currentDashboardData.baseline_status === 'ready' ? '✅ Ready' : 
-                            currentDashboardData.baseline_status === 'not_ready' ? '⏳ Not Ready' : 
-                            '❌ Not Available'}
+                <div className="mt-3 text-sm font-medium">
+                  <span className="text-slate-600">Baseline:</span> 
+                  <span className={`ml-2 ${
+                    currentDashboardData.baseline_status === 'ready' ? 'text-emerald-600' : 
+                    currentDashboardData.baseline_status === 'not_ready' ? 'text-amber-600' : 
+                    'text-rose-600'
+                  }`}>
+                    {currentDashboardData.baseline_status === 'ready' ? '✅ Ready' : 
+                     currentDashboardData.baseline_status === 'not_ready' ? '⏳ Not Ready' : 
+                     '❌ Not Available'}
+                  </span>
                 </div>
               )}
               {/* Profile Status */}
               {currentDashboardData?.profile_status && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Profile: {currentDashboardData.profile_status === 'active' ? '✅ Active' : '❌ Not Available'}
+                <div className="mt-2 text-sm font-medium">
+                  <span className="text-slate-600">Profile:</span> 
+                  <span className={`ml-2 ${
+                    currentDashboardData.profile_status === 'active' ? 'text-emerald-600' : 'text-rose-600'
+                  }`}>
+                    {currentDashboardData.profile_status === 'active' ? '✅ Active' : '❌ Not Available'}
+                  </span>
                   {currentDashboardData.profile_id && (
-                    <span className="ml-2 text-slate-400">(ID: {currentDashboardData.profile_id.substring(0, 8)}...)</span>
+                    <span className="ml-2 text-xs text-slate-400 font-normal">(ID: {currentDashboardData.profile_id.substring(0, 8)}...)</span>
                   )}
                 </div>
               )}
@@ -324,25 +359,28 @@ export default function Dashboard() {
         </div>
 
         {/* Machine and Material Selection - Static Display */}
-        <div className="bg-white/90 rounded-xl p-4 border border-slate-200 shadow-sm mb-6">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300 mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="flex flex-col lg:flex-row lg:items-center gap-4 lg:gap-8">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">Produktionskonfiguration</h2>
+                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <span className="w-1 h-6 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+                  Produktionskonfiguration
+                </h2>
               </div>
-              <div>
-                <p className="text-lg font-bold text-slate-900">Kunststoffwerk ZITTA GmbH</p>
+              <div className="px-4 py-2 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
+                <p className="text-lg font-bold text-purple-900">Kunststoffwerk ZITTA GmbH</p>
               </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
-              <div className="min-w-[120px] sm:min-w-[140px]">
-                <label className="block text-xs font-medium text-slate-500 mb-1">Maschine</label>
-                <div className="bg-white border border-slate-300 rounded-md px-3 sm:px-4 py-2.5 text-sm font-medium text-slate-900 whitespace-nowrap text-center">
+              <div className="min-w-[140px] sm:min-w-[160px]">
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Maschine</label>
+                <div className="bg-gradient-to-br from-slate-50 to-white border-2 border-slate-200 rounded-lg px-4 py-3 text-sm font-bold text-slate-900 whitespace-nowrap text-center shadow-sm">
                   {selectedMachine}
                 </div>
               </div>
-              <div className="min-w-[120px] sm:min-w-[140px]">
-                <label className="block text-xs font-medium text-slate-500 mb-1">Material</label>
+              <div className="min-w-[140px] sm:min-w-[160px]">
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Material</label>
                 <select
                   value={selectedMaterial}
                   onChange={async (e) => {
@@ -363,7 +401,7 @@ export default function Dashboard() {
                     lastFetchRef.current = 0;
                     fetchDashboardData(false);
                   }}
-                  className="bg-white border border-slate-300 rounded-md px-3 sm:px-4 py-2.5 text-sm font-medium text-slate-900 w-full cursor-pointer hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="bg-gradient-to-br from-white to-slate-50 border-2 border-slate-300 rounded-lg px-4 py-3 text-sm font-bold text-slate-900 w-full cursor-pointer hover:border-purple-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all duration-200"
                 >
                   {availableMaterials.map((material) => (
                     <option key={material} value={material}>
@@ -377,12 +415,14 @@ export default function Dashboard() {
         </div>
 
         {/* KPI Cards Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
           {/* Schneckendrehzahl */}
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-[1.02] relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
             <div className="relative z-10">
-              <div className="text-sm font-medium text-slate-500 mb-2">Schneckendrehzahl (ScrewSpeed_rpm)</div>
-              <div className="text-5xl font-bold mb-2">
+              <div className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Schneckendrehzahl</div>
+              <div className="text-xs text-slate-500 mb-3 font-medium">(ScrewSpeed_rpm)</div>
+              <div className="text-5xl font-extrabold mb-3">
                 <span className={
                   machineState === 'PRODUCTION' ? 
                   (currentDashboardData?.metrics?.ScrewSpeed_rpm?.severity === 2 ? 'text-rose-600' :
@@ -443,10 +483,12 @@ export default function Dashboard() {
           </div>
 
           {/* Schmelzedruck */}
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-[1.02] relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
             <div className="relative z-10">
-              <div className="text-sm font-medium text-slate-500 mb-2">Schmelzedruck (Pressure_bar)</div>
-              <div className="text-5xl font-bold mb-2">
+              <div className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Schmelzedruck</div>
+              <div className="text-xs text-slate-500 mb-3 font-medium">(Pressure_bar)</div>
+              <div className="text-5xl font-extrabold mb-3">
                 <span className={
                   machineState === 'PRODUCTION' ? 
                   (currentDashboardData?.metrics?.Pressure_bar?.severity === 2 ? 'text-rose-600' :
@@ -507,19 +549,26 @@ export default function Dashboard() {
           </div>
 
           {/* Durchschnittstemperatur */}
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-[1.02] relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
             <div className="relative z-10">
-              <div className="text-sm font-medium text-slate-500 mb-2">Durchschnittstemperatur (Temp_Avg)</div>
-              <div className="text-5xl font-bold mb-2">
+              <div className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Durchschnittstemperatur</div>
+              <div className="text-xs text-slate-500 mb-3 font-medium">(Temp_Avg)</div>
+              <div className="text-5xl font-extrabold mb-3">
                 <span className={
                   machineState === 'PRODUCTION' ? 
-                  (mssqlDerived?.risk?.overall === 'red' ? 'text-rose-600' :
+                  (currentDashboardData?.metrics?.Temp_Avg?.severity === 2 ? 'text-rose-600' :
+                   currentDashboardData?.metrics?.Temp_Avg?.severity === 1 ? 'text-amber-600' :
+                   currentDashboardData?.metrics?.Temp_Avg?.severity === 0 ? 'text-emerald-600' :
+                   mssqlDerived?.risk?.overall === 'red' ? 'text-rose-600' :
                    mssqlDerived?.risk?.overall === 'yellow' ? 'text-amber-600' :
                    mssqlDerived?.risk?.overall === 'green' ? 'text-emerald-600' :
                    'text-slate-400') :
                   'text-slate-400'  // Neutral color when not in production
                 }>
-                  {mssqlDerived?.derived?.Temp_Avg?.current?.toFixed(1) || '--'}
+                  {currentDashboardData?.metrics?.Temp_Avg?.current_value !== undefined 
+                    ? currentDashboardData.metrics.Temp_Avg.current_value.toFixed(1) 
+                    : (mssqlDerived?.derived?.Temp_Avg?.current?.toFixed(1) || '--')}
                 </span>
                 <span className="text-2xl text-slate-500 ml-2">°C</span>
               </div>
@@ -532,15 +581,23 @@ export default function Dashboard() {
               <div className="text-xs text-slate-600">
                 {machineState === 'PRODUCTION' ? (
                   <>
-                    {mssqlDerived?.derived?.Temp_Avg?.current && 
-                      (mssqlDerived?.derived?.Temp_Avg?.current >= 180 && mssqlDerived?.derived?.Temp_Avg?.current <= 220) &&
+                    {currentDashboardData?.metrics?.Temp_Avg?.severity === 0 && 
                       "🟢 Gesamte Temperatur im optimalen Bereich. Gleichmäßige Plastifizierung sichergestellt."}
-                    {mssqlDerived?.derived?.Temp_Avg?.current && 
-                      ((mssqlDerived?.derived?.Temp_Avg?.current < 180) || (mssqlDerived?.derived?.Temp_Avg?.current > 220)) &&
+                    {currentDashboardData?.metrics?.Temp_Avg?.severity === 1 && 
                       "🟠 Temperatur außerhalb des optimalen Bereichs. Anpassung der Heizzone empfohlen."}
-                    {mssqlDerived?.derived?.Temp_Avg?.current && 
-                      ((mssqlDerived?.derived?.Temp_Avg?.current < 160) || (mssqlDerived?.derived?.Temp_Avg?.current > 240)) &&
+                    {currentDashboardData?.metrics?.Temp_Avg?.severity === 2 && 
                       "🔴 Kritische Temperaturabweichung. Risiko für Materialabbau oder unvollständige Plastifizierung."}
+                    {currentDashboardData?.metrics?.Temp_Avg?.severity === undefined && 
+                      (mssqlDerived?.derived?.Temp_Avg?.current ? (
+                        <>
+                          {mssqlDerived?.derived?.Temp_Avg?.current >= 180 && mssqlDerived?.derived?.Temp_Avg?.current <= 220 &&
+                            "🟢 Gesamte Temperatur im optimalen Bereich. Gleichmäßige Plastifizierung sichergestellt."}
+                          {((mssqlDerived?.derived?.Temp_Avg?.current < 180) || (mssqlDerived?.derived?.Temp_Avg?.current > 220)) &&
+                            "🟠 Temperatur außerhalb des optimalen Bereichs. Anpassung der Heizzone empfohlen."}
+                          {((mssqlDerived?.derived?.Temp_Avg?.current < 160) || (mssqlDerived?.derived?.Temp_Avg?.current > 240)) &&
+                            "🔴 Kritische Temperaturabweichung. Risiko für Materialabbau oder unvollständige Plastifizierung."}
+                        </>
+                      ) : "⏳ Bewertung wird berechnet...")}
                   </>
                 ) : (
                   `⏸️ Maschine im ${machineState} Zustand - keine Prozessbewertung`
@@ -550,18 +607,25 @@ export default function Dashboard() {
           </div>
 
           {/* Temperaturspreizung */}
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-[1.02] relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-br from-rose-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
             <div className="relative z-10">
-              <div className="text-sm font-medium text-slate-500 mb-2">Temperaturspreizung (Temp_Spread)</div>
-              <div className="text-5xl font-bold mb-2">
+              <div className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Temperaturspreizung</div>
+              <div className="text-xs text-slate-500 mb-3 font-medium">(Temp_Spread)</div>
+              <div className="text-5xl font-extrabold mb-3">
                 <span className={
+                  currentDashboardData?.spread_status === 'red' ? 'text-rose-600' :
+                  currentDashboardData?.spread_status === 'orange' ? 'text-amber-600' :
+                  currentDashboardData?.spread_status === 'green' ? 'text-emerald-600' :
                   machineState === 'PRODUCTION' ? 
                   ((mssqlDerived?.derived?.Temp_Spread?.current || 0) > 8 ? 'text-rose-600' :
                    (mssqlDerived?.derived?.Temp_Spread?.current || 0) > 5 ? 'text-amber-600' :
                    'text-emerald-600') :
                   'text-slate-400'  // Neutral color when not in production
                 }>
-                  {mssqlDerived?.derived?.Temp_Spread?.current?.toFixed(1) || '--'}
+                  {currentDashboardData?.metrics?.Temp_Spread?.current_value !== undefined 
+                    ? currentDashboardData.metrics.Temp_Spread.current_value.toFixed(1) 
+                    : (mssqlDerived?.derived?.Temp_Spread?.current?.toFixed(1) || '--')}
                 </span>
                 <span className="text-2xl text-slate-500 ml-2">°C</span>
               </div>
@@ -574,12 +638,14 @@ export default function Dashboard() {
               <div className="text-xs text-slate-600">
                 {machineState === 'PRODUCTION' ? (
                   <>
-                    {(mssqlDerived?.derived?.Temp_Spread?.current || 0) <= 5 && 
+                    {(currentDashboardData?.spread_status === 'green' || (currentDashboardData?.metrics?.Temp_Spread?.current_value || 0) <= 5) && 
                       "🟢 Homogene Temperaturverteilung. Saubere und gleichmäßige Plastifizierung."}
-                    {(mssqlDerived?.derived?.Temp_Spread?.current || 0) > 5 && (mssqlDerived?.derived?.Temp_Spread?.current || 0) <= 8 && 
+                    {(currentDashboardData?.spread_status === 'orange' || ((currentDashboardData?.metrics?.Temp_Spread?.current_value || 0) > 5 && (currentDashboardData?.metrics?.Temp_Spread?.current_value || 0) <= 8)) && 
                       "🟠 Temperaturzonen beginnen zu divergieren. Mögliche Heiz- oder Regelabweichungen."}
-                    {(mssqlDerived?.derived?.Temp_Spread?.current || 0) > 8 && 
+                    {(currentDashboardData?.spread_status === 'red' || (currentDashboardData?.metrics?.Temp_Spread?.current_value || 0) > 8) && 
                       "🔴 Starke Temperaturspreizung. Hohe Wahrscheinlichkeit für Prozessinstabilität, Sensor- oder Heizprobleme."}
+                    {currentDashboardData?.spread_status === 'unknown' && 
+                      "⏳ Bewertung wird berechnet..."}
                   </>
                 ) : (
                   `⏸️ Maschine im ${machineState} Zustand - keine Prozessbewertung`
@@ -619,8 +685,11 @@ export default function Dashboard() {
           }).filter((d: any) => d.value > 0);
 
           return (
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold text-slate-900 mb-4">Sensor Charts (Baseline Comparison)</h2>
+            <div className="mb-8">
+              <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+                <span className="w-1 h-8 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+                Sensor Charts (Baseline Comparison)
+              </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* ScrewSpeed_rpm Chart */}
                 <SensorChart
@@ -723,11 +792,14 @@ export default function Dashboard() {
           );
         })()}
 
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold text-slate-900 mb-4">Temperaturzonen (Zone 1–4)</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+            <span className="w-1 h-8 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+            Temperaturzonen (Zone 1–4)
+          </h2>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => (
-              <div key={zone} className="bg-white/90 rounded-xl p-4 border border-slate-200 shadow-sm">
+              <div key={zone} className="bg-white/95 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-[1.02]">
                 <div className="text-sm font-medium text-slate-500 mb-2">Zone {index + 1}</div>
                 <div className="text-3xl font-bold mb-2">
                   <span className={
@@ -765,9 +837,12 @@ export default function Dashboard() {
         </div>
 
         {/* Stabilität */}
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold text-slate-900 mb-4">Stabilität (Time Spread / Fluktuation)</h2>
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm">
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+            <span className="w-1 h-8 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+            Stabilität (Time Spread / Fluktuation)
+          </h2>
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg">
             <div className="text-xs text-slate-500 mb-4">
               <strong>Calculation:</strong> stability_ratio = window_std / baseline_std
               <br />
@@ -831,10 +906,20 @@ export default function Dashboard() {
         </div>
 
         {/* Prozessbewertung */}
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold text-slate-900 mb-4">Prozessbewertung (Gesamttext)</h2>
-          <div className="bg-white/90 rounded-xl p-6 border border-slate-200 shadow-sm">
-            <div className="text-lg font-medium text-slate-900 mb-3">
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+            <span className="w-1 h-8 bg-gradient-to-b from-purple-500 to-purple-700 rounded-full"></span>
+            Prozessbewertung (Gesamttext)
+          </h2>
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-slate-200/80 shadow-lg">
+            <div className={`text-2xl font-extrabold mb-4 px-6 py-4 rounded-xl ${
+              machineState === 'PRODUCTION' ? (
+                mssqlDerived?.risk?.overall === 'green' ? 'bg-gradient-to-r from-emerald-100 to-emerald-200 text-emerald-800 border-2 border-emerald-300' :
+                mssqlDerived?.risk?.overall === 'yellow' ? 'bg-gradient-to-r from-amber-100 to-amber-200 text-amber-800 border-2 border-amber-300' :
+                mssqlDerived?.risk?.overall === 'red' ? 'bg-gradient-to-r from-rose-100 to-rose-200 text-rose-800 border-2 border-rose-300' :
+                'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-800 border-2 border-slate-300'
+              ) : 'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-800 border-2 border-slate-300'
+            }`}>
               {machineState === 'PRODUCTION' ? (
                 <>
                   {mssqlDerived?.risk?.overall === 'green' && "🟢 GRÜNER PROZESSZUSTAND"}
@@ -845,7 +930,7 @@ export default function Dashboard() {
                 `⏸️ Maschine im ${machineState} Zustand - keine Prozessbewertung`
               )}
             </div>
-            <div className="text-slate-700">
+            <div className="text-slate-700 text-lg leading-relaxed">
               {machineState === 'PRODUCTION' ? (
                 <>
                   {mssqlDerived?.risk?.overall === 'green' && 
