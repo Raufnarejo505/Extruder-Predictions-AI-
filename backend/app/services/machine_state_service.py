@@ -351,16 +351,25 @@ class MachineStateDetector:
         pressure_val = pressure if pressure is not None else 0.0
         temp_avg_val = temp_avg if temp_avg is not None else 0.0
         
-        logger.debug("State determination: machine_id={}, rpm={}, pressure={}, temp_avg={}, d_temp={}", 
-                    self.machine_id, rpm_val, pressure_val, temp_avg_val, d_temp)
+        logger.info("State determination: machine_id={}, rpm={}, pressure={}, temp_avg={}, d_temp={}, thresholds: RPM_PROD={}, P_PROD={}", 
+                    self.machine_id, rpm_val, pressure_val, temp_avg_val, d_temp, 
+                    self.thresholds.RPM_PROD, self.thresholds.P_PROD)
         
         # PRODUCTION: primary criteria - CHECK FIRST before other states
         # This ensures high RPM + high pressure = PRODUCTION, regardless of other conditions
         if (rpm_val >= self.thresholds.RPM_PROD and 
             pressure is not None and pressure >= self.thresholds.P_PROD):
-            logger.info("PRODUCTION state detected (primary): machine_id={}, rpm={}, pressure={}, temp_avg={}", 
-                       self.machine_id, rpm_val, pressure, temp_avg)
+            logger.info("✅ PRODUCTION state detected (primary): machine_id={}, rpm={} (>= {}), pressure={} (>= {}), temp_avg={}", 
+                       self.machine_id, rpm_val, self.thresholds.RPM_PROD, pressure, self.thresholds.P_PROD, temp_avg)
             return MachineState.PRODUCTION, 0.9
+        else:
+            # Log why PRODUCTION wasn't detected
+            if rpm_val < self.thresholds.RPM_PROD:
+                logger.debug("PRODUCTION not detected: rpm={} < RPM_PROD={}", rpm_val, self.thresholds.RPM_PROD)
+            if pressure is None:
+                logger.debug("PRODUCTION not detected: pressure is None")
+            elif pressure < self.thresholds.P_PROD:
+                logger.debug("PRODUCTION not detected: pressure={} < P_PROD={}", pressure, self.thresholds.P_PROD)
         
         # PRODUCTION: fallback criteria - also check before OFF/IDLE
         if rpm_val >= self.thresholds.RPM_PROD:
