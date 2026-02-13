@@ -75,6 +75,10 @@ async def create_profile(
         await session.commit()
         await session.refresh(new_profile)
         
+        # Explicitly start baseline learning to ensure proper initialization
+        await baseline_learning_service.start_baseline_learning(session, new_profile.id)
+        await session.commit()
+        
         logger.info(
             f"Created profile {new_profile.id} for "
             f"{'machine ' + str(payload.machine_id) + ' and ' if payload.machine_id else ''}"

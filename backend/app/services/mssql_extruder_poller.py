@@ -546,14 +546,23 @@ class MSSQLExtruderPoller:
                                         ts,
                                     )
                                     if collected_count > 0:
-                                        logger.info(f"✅ Collected {collected_count} baseline samples for profile {profile.id} (material: {material_id})")
-                                    else:
-                                        logger.debug(f"No samples collected for profile {profile.id} (material: {material_id})")
-                                else:
-                                    logger.debug(f"No valid samples to collect for profile {profile.id} (material: {material_id})")
+                                        logger.info(
+                                            f"✅ Collected {collected_count} baseline samples for profile {profile.id} "
+                                            f"(machine_id={machine.id}, material_id={material_id})"
+                                        )
+                            elif profile:
+                                logger.debug(
+                                    f"Profile {profile.id} found but baseline_learning={profile.baseline_learning}, "
+                                    f"skipping sample collection"
+                                )
+                            else:
+                                logger.debug(
+                                    f"No active profile found for machine_id={machine.id}, material_id={material_id}, "
+                                    f"skipping baseline sample collection"
+                                )
                         except Exception as e:
                             # Non-blocking: baseline learning should not break main flow
-                            logger.warning(f"Baseline learning sample collection failed for profile {profile.id if profile else 'unknown'}: {e}", exc_info=True)
+                            logger.warning(f"Baseline learning sample collection failed: {e}", exc_info=True)
                         
                         # Feed canonical variables into the extruder AI decision window.
                         # We always provide pressure and average temperature when available.
