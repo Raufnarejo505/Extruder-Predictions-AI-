@@ -488,22 +488,45 @@ class MachineStateDetector:
         if new_state == MachineState.PRODUCTION:
             timer_name = f"enter_production_{self.machine_id}"
             
-            if not self.timer.is_timer_expired(timer_name):
-                # Still waiting for timer
-                return current, confidence
-            
-            # Check if we've been in production-like state for 90s
-            state_duration = self.timer.get_state_duration(current)
-            if state_duration.total_seconds() >= self.thresholds.PRODUCTION_ENTER_TIME:
-                # Can enter production
-                self.timer.clear_timer(timer_name)
+            # If already in PRODUCTION, no change needed
+            if current == MachineState.PRODUCTION:
                 return new_state, confidence
+            
+            # Check if timer has expired (or doesn't exist)
+            if self.timer.is_timer_expired(timer_name):
+                # Timer expired or doesn't exist - check if we've been meeting PRODUCTION criteria
+                # For first-time detection or after timer expiry, allow immediate transition
+                # but only if we have enough readings to be confident
+                if len(self.reading_buffer) >= 10:  # Need at least 10 readings for confidence
+                    logger.info(f"PRODUCTION transition allowed: timer expired, {len(self.reading_buffer)} readings available")
+                    self.timer.clear_timer(timer_name)
+                    self.timer.set_state_start(new_state)
+                    return new_state, confidence
+                else:
+                    # Not enough readings yet - start timer
+                    logger.debug(f"PRODUCTION transition delayed: only {len(self.reading_buffer)} readings, need 10+")
+                    if timer_name not in self.timer.timers:
+                        self.timer.start_timer(timer_name, self.thresholds.PRODUCTION_ENTER_TIME)
+                    return current, confidence
             else:
-                # Start timer if not already running
-                if timer_name not in self.timer.timers:
-                    remaining_time = self.thresholds.PRODUCTION_ENTER_TIME - state_duration.total_seconds()
-                    self.timer.start_timer(timer_name, int(remaining_time))
-                return current, confidence
+                # Timer still running - check how long we've been meeting PRODUCTION criteria
+                # Count consecutive readings that meet PRODUCTION criteria
+                production_readings = 0
+                for r in list(self.reading_buffer)[-30:]:  # Check last 30 readings
+                    if (r.screw_rpm is not None and r.screw_rpm >= self.thresholds.RPM_PROD and
+                        r.pressure_bar is not None and r.pressure_bar >= self.thresholds.P_PROD):
+                        production_readings += 1
+                
+                # If we have enough consecutive production readings, allow transition
+                if production_readings >= 10:  # At least 10 consecutive production readings
+                    logger.info(f"PRODUCTION transition allowed: {production_readings} consecutive production readings")
+                    self.timer.clear_timer(timer_name)
+                    self.timer.set_state_start(new_state)
+                    return new_state, confidence
+                else:
+                    # Still waiting - return current state
+                    logger.debug(f"PRODUCTION transition waiting: {production_readings}/10 consecutive production readings")
+                    return current, confidence
         
         # Exiting production (requires 120s)
         elif current == MachineState.PRODUCTION and new_state != MachineState.PRODUCTION:
