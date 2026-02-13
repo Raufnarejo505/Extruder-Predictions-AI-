@@ -35,6 +35,9 @@ export default function Dashboard() {
   const [machineState, setMachineState] = useState<string>('IDLE');
   const [machineStates, setMachineStates] = useState<any>({});
   const [currentDashboardData, setCurrentDashboardData] = useState<any>(null);
+  const [showCreateProfileModal, setShowCreateProfileModal] = useState(false);
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
+  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
   
   const backendStatus = useBackendStore((state) => state.status);
   const mountedRef = useRef(true);
@@ -351,6 +354,27 @@ export default function Dashboard() {
                   {currentDashboardData.profile_id && (
                     <span className="ml-2 text-xs text-slate-400">(ID: {currentDashboardData.profile_id.substring(0, 8)}...)</span>
                   )}
+                </div>
+              )}
+              {/* Profile Not Available - Create Profile Banner */}
+              {currentDashboardData?.profile_status === 'not_available' && (
+                <div className="mt-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="text-sm text-amber-800 mb-1">
+                        <span>⚠️ No Profile Found</span>
+                      </div>
+                      <div className="text-xs text-amber-700">
+                        A profile is required for baseline learning and evaluation. Create a profile for "{selectedMaterial}" to enable baseline tracking.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowCreateProfileModal(true)}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm rounded-md transition-colors duration-200 whitespace-nowrap"
+                    >
+                      Create Profile
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -941,6 +965,129 @@ export default function Dashboard() {
         
         {/* Live Data Table - Removed */}
         {/* OPC UA Status - Removed */}
+        
+        {/* Create Profile Modal */}
+        {showCreateProfileModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl text-slate-900">Create Profile</h3>
+                <button
+                  onClick={() => {
+                    setShowCreateProfileModal(false);
+                    setCreateProfileError(null);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-slate-700 mb-2">Material ID</label>
+                  <input
+                    type="text"
+                    value={selectedMaterial}
+                    disabled
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md bg-slate-50 text-slate-600"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Profile will be created for this material</p>
+                </div>
+                
+                <div>
+                  <label className="block text-sm text-slate-700 mb-2">Version (Optional)</label>
+                  <input
+                    type="text"
+                    id="profile-version"
+                    defaultValue="1.0"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="1.0"
+                  />
+                </div>
+
+                {createProfileError && (
+                  <div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded-md text-sm text-rose-700">
+                    {createProfileError}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={async () => {
+                      setIsCreatingProfile(true);
+                      setCreateProfileError(null);
+                      try {
+                        // Get machine ID from current dashboard data or machines list
+                        let machineId: string | null = null;
+                        if (currentDashboardData?.machine_id) {
+                          machineId = currentDashboardData.machine_id;
+                        } else {
+                          // Try to get from machines list
+                          const machinesResult = await safeApi.get('/machines');
+                          if (machinesResult.data && Array.isArray(machinesResult.data)) {
+                            const machine = machinesResult.data.find((m: any) => 
+                              m.name === selectedMachine || m.id === selectedMachine
+                            );
+                            if (machine) {
+                              machineId = machine.id;
+                            }
+                          }
+                        }
+
+                        const versionInput = document.getElementById('profile-version') as HTMLInputElement;
+                        const version = versionInput?.value || "1.0";
+
+                        const payload: any = {
+                          material_id: selectedMaterial,
+                          version: version,
+                        };
+                        
+                        // Only include machine_id if we found one (otherwise create material default profile)
+                        if (machineId) {
+                          payload.machine_id = machineId;
+                        }
+
+                        await safeApi.post('/profiles', payload);
+                        
+                        // Close modal and refresh data
+                        setShowCreateProfileModal(false);
+                        setCreateProfileError(null);
+                        // Trigger data refresh by reloading page
+                        window.location.reload();
+                      } catch (error: any) {
+                        console.error('Failed to create profile:', error);
+                        setCreateProfileError(
+                          error?.response?.data?.detail || 
+                          error?.message || 
+                          'Failed to create profile. Please try again.'
+                        );
+                      } finally {
+                        setIsCreatingProfile(false);
+                      }
+                    }}
+                    disabled={isCreatingProfile}
+                    className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-md transition-colors duration-200"
+                  >
+                    {isCreatingProfile ? 'Creating...' : 'Create Profile'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowCreateProfileModal(false);
+                      setCreateProfileError(null);
+                    }}
+                    disabled={isCreatingProfile}
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 disabled:bg-slate-100 text-slate-700 rounded-md transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

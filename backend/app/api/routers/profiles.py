@@ -1,17 +1,104 @@
 from typing import List, Optional, Dict, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 
 from app.api.dependencies import get_session, get_current_user, require_engineer, require_admin
 from app.models.user import User
 from app.models.profile import Profile
+from app.models.machine import Machine
 from app.services.baseline_learning_service import baseline_learning_service
 from loguru import logger
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
+
+
+class ProfileCreate(BaseModel):
+    """Schema for creating a new profile"""
+    machine_id: Optional[UUID] = None  # If None, creates material default profile
+    material_id: str  # Required
+    version: Optional[str] = "1.0"  # Optional version string
+
+
+@router.post("", status_code=201)
+async def create_profile(
+    payload: ProfileCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Create a new profile for a machine/material combination.
+    
+    - If machine_id is provided, creates a machine-specific profile
+    - If machine_id is None, creates a material default profile (usable by all machines)
+    - Automatically starts baseline learning mode
+    """
+    try:
+        # Validate machine_id if provided
+        if payload.machine_id:
+            machine = await session.get(Machine, payload.machine_id)
+            if not machine:
+                raise HTTPException(status_code=404, detail=f"Machine {payload.machine_id} not found")
+        
+        # Check if active profile already exists for this combination
+        query = select(Profile).where(
+            and_(
+                Profile.machine_id == (payload.machine_id if payload.machine_id else None),
+                Profile.material_id == payload.material_id,
+                Profile.is_active == True,
+            )
+        )
+        result = await session.execute(query)
+        existing_profile = result.scalar_one_or_none()
+        
+        if existing_profile:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Active profile already exists for {'machine ' + str(payload.machine_id) + ' and ' if payload.machine_id else ''}material {payload.material_id}"
+            )
+        
+        # Create new profile
+        new_profile = Profile(
+            id=uuid4(),
+            machine_id=payload.machine_id,
+            material_id=payload.material_id,
+            version=payload.version or "1.0",
+            is_active=True,
+            baseline_learning=True,  # Start learning mode automatically
+            baseline_ready=False,
+        )
+        
+        session.add(new_profile)
+        await session.commit()
+        await session.refresh(new_profile)
+        
+        logger.info(
+            f"Created profile {new_profile.id} for "
+            f"{'machine ' + str(payload.machine_id) + ' and ' if payload.machine_id else ''}"
+            f"material {payload.material_id} by user {current_user.email}"
+        )
+        
+        return {
+            "id": str(new_profile.id),
+            "machine_id": str(new_profile.machine_id) if new_profile.machine_id else None,
+            "material_id": new_profile.material_id,
+            "is_active": new_profile.is_active,
+            "version": new_profile.version,
+            "baseline_learning": new_profile.baseline_learning,
+            "baseline_ready": new_profile.baseline_ready,
+            "created_at": new_profile.created_at.isoformat() if new_profile.created_at else None,
+            "message": "Profile created successfully. Baseline learning has been started automatically.",
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating profile: {e}")
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create profile: {str(e)}")
 
 
 @router.get("")
