@@ -120,6 +120,7 @@ class ProfileBaselineStats(Base):
     """
 
     __tablename__ = "profile_baseline_stats"
+    __mapper_args__ = {'exclude_properties': ['created_at', 'updated_at']}  # Exclude columns that don't exist in DB
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True)
     profile_id = Column(
