@@ -714,7 +714,7 @@ async def get_extruder_derived_kpis(
 
     # Step 3.5: Load Profile Data BEFORE Stability Evaluation (needed for baseline_std)
     # Get active profile for scoring bands and baselines
-    from app.services.baseline_learning_service import baseline_learning_service
+    from app.services.baseline_learning_service import baseline_learning_service, BaselineLearningService
     from app.models.profile import ProfileScoringBand, ProfileBaselineStats
     # Note: select and and_ are already imported at the top of the file
     
@@ -1257,7 +1257,7 @@ async def get_current_dashboard_data(
     If material_id is provided, it will be used to load the profile. Otherwise, uses machine metadata.
     """
     from app.services.machine_state_manager import MachineStateService
-    from app.services.baseline_learning_service import baseline_learning_service
+    from app.services.baseline_learning_service import baseline_learning_service, BaselineLearningService
     from app.models.profile import ProfileBaselineStats, ProfileScoringBand
     from sqlalchemy import select as sql_select  # Explicit import to avoid UnboundLocalError
     
@@ -1454,12 +1454,29 @@ async def get_current_dashboard_data(
     # Baseline and profile status
     baseline_status = "not_ready"
     profile_status = "not_available"
+    baseline_samples_collected = 0
+    baseline_samples_required = BaselineLearningService.MIN_SAMPLES_FOR_BASELINE
+    baseline_progress_percent = 0.0
+    
     if active_profile:
         profile_status = "active"
         if active_profile.baseline_ready:
             baseline_status = "ready"
         elif active_profile.baseline_learning:
             baseline_status = "learning"
+            # Get sample count from ProfileBaselineStats
+            from sqlalchemy import select as sql_select
+            stats_result = await session.execute(
+                sql_select(ProfileBaselineStats)
+                .where(ProfileBaselineStats.profile_id == active_profile.id)
+            )
+            all_stats = stats_result.scalars().all()
+            if all_stats:
+                # Get minimum sample count across all metrics (we need all metrics to have enough samples)
+                baseline_samples_collected = int(min(stat.sample_count or 0.0 for stat in all_stats))
+            else:
+                baseline_samples_collected = 0
+            baseline_progress_percent = min(100.0, (baseline_samples_collected / baseline_samples_required) * 100.0)
         else:
             baseline_status = "not_ready"
     
@@ -2083,6 +2100,9 @@ async def get_current_dashboard_data(
         "ml_warning": ml_warning_overall if is_in_production else False,  # Overall ML warning flag (informational only, does NOT change process_status)
         "explanation_text": explanation_text,  # Kept for backward compatibility
         "baseline_status": baseline_status,
+        "baseline_samples_collected": baseline_samples_collected,  # Number of samples collected during learning
+        "baseline_samples_required": baseline_samples_required,  # Required samples (100)
+        "baseline_progress_percent": baseline_progress_percent,  # Progress percentage (0-100)
         "profile_status": profile_status,
         "evaluation_enabled": is_in_production,
         "spread_status": spread_status,  # Temp_Spread status: "green" | "orange" | "red" | "unknown"

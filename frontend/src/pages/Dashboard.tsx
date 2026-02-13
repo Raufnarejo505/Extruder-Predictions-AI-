@@ -319,11 +319,33 @@ export default function Dashboard() {
                 {machineState === 'IDLE' && <div className="flex items-center gap-2"><span className="text-slate-600">⏸️</span> Bereit - Warten auf Produktionsstart</div>}
                 {machineState === 'OFF' && <div className="flex items-center gap-2"><span className="text-red-600">🔴</span> Maschine aus - Keine Heizung aktiv</div>}
               </div>
-              {/* Learning Mode Indicator */}
+              {/* Learning Mode Indicator with Progress */}
               {currentDashboardData?.baseline_status === 'learning' && (
-                <div className="mt-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="text-sm text-blue-800 flex items-center gap-2">
+                <div className="mt-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="text-sm text-blue-800 flex items-center gap-2 mb-2">
                     <span>📚</span> Baseline Learning Mode Active - Alarms Disabled
+                  </div>
+                  {/* Progress Bar */}
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between text-xs text-blue-700 mb-1">
+                      <span>
+                        {currentDashboardData?.baseline_samples_collected || 0} / {currentDashboardData?.baseline_samples_required || 100} Samples
+                      </span>
+                      <span className="font-medium">
+                        {Math.round(currentDashboardData?.baseline_progress_percent || 0)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ 
+                          width: `${Math.min(100, currentDashboardData?.baseline_progress_percent || 0)}%` 
+                        }}
+                      ></div>
+                    </div>
+                    <div className="text-xs text-blue-600 mt-1">
+                      Collecting samples during PRODUCTION state...
+                    </div>
                   </div>
                 </div>
               )}
