@@ -246,13 +246,13 @@ export default function Dashboard() {
                   isFallback || !aiStatus ? 'bg-rose-500' : 
                   (aiStatus.status === 'healthy' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500')
                 }`}></div>
-                <span className="text-xs text-slate-500">AI SERVICE</span>
+                <span className="text-xs text-slate-500">KI-DIENST</span>
               </div>
               <div className={`text-base ${
                 isFallback || !aiStatus ? 'text-rose-600' : 
                 (aiStatus.status === 'healthy' ? 'text-emerald-600' : 'text-amber-600')
               }`}>
-                {isFallback || !aiStatus ? 'Offline' : (aiStatus.status === 'healthy' ? 'Healthy' : 'Degraded')}
+                {isFallback || !aiStatus ? 'Offline' : (aiStatus.status === 'healthy' ? 'Betriebsbereit' : 'Beeinträchtigt')}
               </div>
             </div>
             <div className="bg-white/95 backdrop-blur-sm border border-slate-200/80 rounded-xl px-5 py-3 shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] flex-1 min-w-[180px]">
@@ -270,8 +270,8 @@ export default function Dashboard() {
                 (mssqlStatus.last_error ? 'text-rose-600' : 'text-emerald-600'))
               }`}>
                 {!mssqlStatus
-                  ? 'Unknown'
-                  : (!mssqlStatus.configured ? 'Not Configured' : (mssqlStatus.last_error ? 'Error' : 'Connected'))}
+                  ? 'Unbekannt'
+                  : (!mssqlStatus.configured ? 'Nicht konfiguriert' : (mssqlStatus.last_error ? 'Fehler' : 'Verbunden'))}
               </div>
               {mssqlStatus?.last_error ? (
                 <div className="text-xs text-rose-700 mt-2 max-w-[260px] truncate" title={String(mssqlStatus.last_error)}>
@@ -282,9 +282,9 @@ export default function Dashboard() {
             <div className="bg-white/95 backdrop-blur-sm border border-slate-200/80 rounded-xl px-5 py-3 shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] flex-1 min-w-[180px]">
               <div className="flex items-center gap-2 mb-1">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                <span className="text-xs text-slate-500">SYSTEM STATUS</span>
+                <span className="text-xs text-slate-500">SYSTEMSTATUS</span>
               </div>
-              <div className="text-base text-emerald-600">All Systems Operational</div>
+              <div className="text-base text-emerald-600">Alle Systeme betriebsbereit</div>
             </div>
           </div>
         </div>
@@ -294,14 +294,14 @@ export default function Dashboard() {
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex-1">
               <h3 className="text-xl text-slate-900 mb-2">
-                Machine State
+                Maschinenzustand
               </h3>
               <div className="text-sm text-slate-600 leading-relaxed">
-                State Definitions: OFF (Machine off/cold) | IDLE (Warm/ready) | HEATING (Warming up) | PRODUCTION (Process running) | COOLING (Cooling down)
+                Zustandsdefinitionen: AUS (Maschine aus/kalt) | BEREIT (Warm/bereit) | AUFHEIZEN (Aufwärmen) | PRODUKTION (Prozess läuft) | ABKÜHLEN (Abkühlen)
               </div>
             </div>
             <div className="text-right lg:text-right">
-              <div className="text-sm text-slate-500 mb-2">Current State</div>
+              <div className="text-sm text-slate-500 mb-2">Aktueller Zustand</div>
               <div className={`inline-block text-xl px-4 py-2 rounded-lg ${
                 machineState === 'PRODUCTION' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
                 machineState === 'HEATING' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
@@ -313,11 +313,11 @@ export default function Dashboard() {
                 {machineState}
               </div>
               <div className="text-sm text-slate-600 mt-3 space-y-1">
-                {machineState === 'PRODUCTION' && <div className="flex items-center gap-2"><span className="text-emerald-600">🟢</span> Process active - Traffic light evaluation enabled</div>}
-                {machineState === 'HEATING' && <div className="flex items-center gap-2"><span className="text-amber-600">🔥</span> Warming up - Preparing for production</div>}
-                {machineState === 'COOLING' && <div className="flex items-center gap-2"><span className="text-blue-600">❄️</span> Cooling down - Post-production cycle</div>}
-                {machineState === 'IDLE' && <div className="flex items-center gap-2"><span className="text-slate-600">⏸️</span> Ready - Waiting for production start</div>}
-                {machineState === 'OFF' && <div className="flex items-center gap-2"><span className="text-red-600">🔴</span> Machine off - No heating active</div>}
+                {machineState === 'PRODUCTION' && <div className="flex items-center gap-2"><span className="text-emerald-600">🟢</span> Prozess aktiv - Ampelbewertung aktiviert</div>}
+                {machineState === 'HEATING' && <div className="flex items-center gap-2"><span className="text-amber-600">🔥</span> Aufwärmen - Vorbereitung auf Produktion</div>}
+                {machineState === 'COOLING' && <div className="flex items-center gap-2"><span className="text-blue-600">❄️</span> Abkühlen - Nachproduktionszyklus</div>}
+                {machineState === 'IDLE' && <div className="flex items-center gap-2"><span className="text-slate-600">⏸️</span> Bereit - Warten auf Produktionsstart</div>}
+                {machineState === 'OFF' && <div className="flex items-center gap-2"><span className="text-red-600">🔴</span> Maschine aus - Keine Heizung aktiv</div>}
               </div>
               {/* Learning Mode Indicator */}
               {currentDashboardData?.baseline_status === 'learning' && (
