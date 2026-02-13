@@ -538,16 +538,22 @@ class MSSQLExtruderPoller:
                                 # Collect samples (only non-None values)
                                 valid_samples = {k: v for k, v in samples.items() if v is not None}
                                 if valid_samples:
-                                    await baseline_learning_service.collect_samples_batch(
+                                    collected_count = await baseline_learning_service.collect_samples_batch(
                                         session,
                                         profile.id,
                                         valid_samples,
                                         "PRODUCTION",
                                         ts,
                                     )
+                                    if collected_count > 0:
+                                        logger.info(f"✅ Collected {collected_count} baseline samples for profile {profile.id} (material: {material_id})")
+                                    else:
+                                        logger.debug(f"No samples collected for profile {profile.id} (material: {material_id})")
+                                else:
+                                    logger.debug(f"No valid samples to collect for profile {profile.id} (material: {material_id})")
                         except Exception as e:
                             # Non-blocking: baseline learning should not break main flow
-                            logger.debug(f"Baseline learning sample collection failed: {e}")
+                            logger.warning(f"Baseline learning sample collection failed for profile {profile.id if profile else 'unknown'}: {e}", exc_info=True)
                         
                         # Feed canonical variables into the extruder AI decision window.
                         # We always provide pressure and average temperature when available.

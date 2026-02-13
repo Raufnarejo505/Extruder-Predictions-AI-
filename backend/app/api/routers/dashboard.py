@@ -1473,25 +1473,32 @@ async def get_current_dashboard_data(
             )
             all_stats = stats_result.scalars().all()
             
-            if all_stats:
-                # Get minimum sample count across all metrics (we need all metrics to have enough samples)
-                # Filter out None values and ensure we have valid counts
-                sample_counts = [float(stat.sample_count or 0.0) for stat in all_stats if stat.sample_count is not None]
-                if sample_counts:
-                    baseline_samples_collected = int(min(sample_counts))
-                else:
-                    baseline_samples_collected = 0
+            # Always check ProfileBaselineSample table for most accurate count
+            # This is the source of truth during learning (before finalization)
+            sample_count_result = await session.execute(
+                sql_select(func.count(ProfileBaselineSample.id))
+                .where(ProfileBaselineSample.profile_id == active_profile.id)
+            )
+            total_samples = sample_count_result.scalar() or 0
+            
+            # Count unique timestamps to get number of sample collection events
+            # Each event collects samples for all metrics at once
+            timestamp_count_result = await session.execute(
+                sql_select(func.count(func.distinct(ProfileBaselineSample.timestamp)))
+                .where(ProfileBaselineSample.profile_id == active_profile.id)
+            )
+            unique_timestamps = timestamp_count_result.scalar() or 0
+            
+            # Use the minimum of total samples divided by expected metrics, or unique timestamps
+            # We expect 7 metrics per collection event (ScrewSpeed_rpm, Pressure_bar, Temp_Zone1-4, Temp_Avg, Temp_Spread)
+            expected_metrics_per_event = 7
+            if total_samples > 0:
+                # Calculate samples per metric: total samples / expected metrics per event
+                samples_per_metric = total_samples / expected_metrics_per_event
+                # Use the minimum of calculated samples per metric or unique timestamps
+                baseline_samples_collected = int(min(samples_per_metric, unique_timestamps))
             else:
-                # If no stats exist yet, check ProfileBaselineSample table for raw count
-                # This handles the case where learning just started but no stats created yet
-                sample_count_result = await session.execute(
-                    sql_select(func.count(ProfileBaselineSample.id))
-                    .where(ProfileBaselineSample.profile_id == active_profile.id)
-                )
-                raw_sample_count = sample_count_result.scalar() or 0
-                # Estimate samples per metric (assuming all metrics are collected together)
-                # We have 7 metrics, so divide by 7 to get approximate samples per metric
-                baseline_samples_collected = max(0, int(raw_sample_count / 7)) if raw_sample_count > 0 else 0
+                baseline_samples_collected = 0
             
             # Calculate progress percentage (avoid division by zero)
             if baseline_samples_required > 0:
