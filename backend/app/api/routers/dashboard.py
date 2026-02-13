@@ -1258,7 +1258,7 @@ async def get_current_dashboard_data(
     """
     from app.services.machine_state_manager import MachineStateService
     from app.services.baseline_learning_service import baseline_learning_service, BaselineLearningService
-    from app.models.profile import ProfileBaselineStats, ProfileScoringBand
+    from app.models.profile import ProfileBaselineStats, ProfileScoringBand, ProfileBaselineSample
     from sqlalchemy import select as sql_select  # Explicit import to avoid UnboundLocalError
     
     # Get the extruder machine (assuming single machine for now)
@@ -1466,17 +1466,38 @@ async def get_current_dashboard_data(
             baseline_status = "learning"
             # Get sample count from ProfileBaselineStats
             from sqlalchemy import select as sql_select
+            from app.models.profile import ProfileBaselineSample
             stats_result = await session.execute(
                 sql_select(ProfileBaselineStats)
                 .where(ProfileBaselineStats.profile_id == active_profile.id)
             )
             all_stats = stats_result.scalars().all()
+            
             if all_stats:
                 # Get minimum sample count across all metrics (we need all metrics to have enough samples)
-                baseline_samples_collected = int(min(stat.sample_count or 0.0 for stat in all_stats))
+                # Filter out None values and ensure we have valid counts
+                sample_counts = [float(stat.sample_count or 0.0) for stat in all_stats if stat.sample_count is not None]
+                if sample_counts:
+                    baseline_samples_collected = int(min(sample_counts))
+                else:
+                    baseline_samples_collected = 0
             else:
-                baseline_samples_collected = 0
-            baseline_progress_percent = min(100.0, (baseline_samples_collected / baseline_samples_required) * 100.0)
+                # If no stats exist yet, check ProfileBaselineSample table for raw count
+                # This handles the case where learning just started but no stats created yet
+                sample_count_result = await session.execute(
+                    sql_select(func.count(ProfileBaselineSample.id))
+                    .where(ProfileBaselineSample.profile_id == active_profile.id)
+                )
+                raw_sample_count = sample_count_result.scalar() or 0
+                # Estimate samples per metric (assuming all metrics are collected together)
+                # We have 7 metrics, so divide by 7 to get approximate samples per metric
+                baseline_samples_collected = max(0, int(raw_sample_count / 7)) if raw_sample_count > 0 else 0
+            
+            # Calculate progress percentage (avoid division by zero)
+            if baseline_samples_required > 0:
+                baseline_progress_percent = min(100.0, (baseline_samples_collected / baseline_samples_required) * 100.0)
+            else:
+                baseline_progress_percent = 0.0
         else:
             baseline_status = "not_ready"
     

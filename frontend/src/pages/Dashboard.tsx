@@ -329,17 +329,17 @@ export default function Dashboard() {
                   <div className="mt-2">
                     <div className="flex items-center justify-between text-xs text-blue-700 mb-1">
                       <span>
-                        {currentDashboardData?.baseline_samples_collected || 0} / {currentDashboardData?.baseline_samples_required || 100} Samples
+                        {currentDashboardData?.baseline_samples_collected ?? 0} / {currentDashboardData?.baseline_samples_required ?? 100} Samples
                       </span>
                       <span className="font-medium">
-                        {Math.round(currentDashboardData?.baseline_progress_percent || 0)}%
+                        {Math.round(currentDashboardData?.baseline_progress_percent ?? 0)}%
                       </span>
                     </div>
                     <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
                       <div 
                         className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                         style={{ 
-                          width: `${Math.min(100, currentDashboardData?.baseline_progress_percent || 0)}%` 
+                          width: `${Math.min(100, Math.max(0, currentDashboardData?.baseline_progress_percent ?? 0))}%` 
                         }}
                       ></div>
                     </div>
