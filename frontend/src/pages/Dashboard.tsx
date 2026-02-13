@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useBackendStore } from '../store/backendStore';
 import { safeApi } from '../api/safeApi';
 import { BackendOnlineBanner } from '../components/BackendOnlineBanner';
 import { DashboardSkeleton } from '../components/LoadingSkeleton';
 import { useT } from '../i18n/I18nProvider';
+import { SensorChart } from '../components/SensorChart';
 
 const gradientClass = "min-h-screen bg-[#f7f5ff] text-slate-900";
 const REFRESH_INTERVAL = 3000; // 3 seconds refresh interval
@@ -25,7 +26,9 @@ export default function Dashboard() {
   const [isFallback, setIsFallback] = useState(false);
   const [selectedMachine] = useState<string>('BEX 92-28V');
   const [selectedMaterial, setSelectedMaterial] = useState<string>('Material 1');
+  const [previousMaterial, setPreviousMaterial] = useState<string | null>(null);
   const [availableMaterials] = useState<string[]>(['Material 1', 'Material 2', 'Material 3']);
+  const [materialChanges, setMaterialChanges] = useState<Array<{ material_id: string; timestamp: string }>>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isResetting, setIsResetting] = useState(false);
   const [resetMessage, setResetMessage] = useState<string | null>(null);
@@ -55,7 +58,7 @@ export default function Dashboard() {
       
       try {
         // Fetch all data in parallel - matching backend endpoints
-        const [overviewResult, predictionsResult, aiResult, machinesStatsResult, sensorsStatsResult, predictionsStatsResult, mssqlStatusResult, mssqlLatestResult, mssqlDerivedResult, machineStatesResult, machinesResult, currentDashboardResult] = await Promise.all([
+        const [overviewResult, predictionsResult, aiResult, machinesStatsResult, sensorsStatsResult, predictionsStatsResult, mssqlStatusResult, mssqlLatestResult, mssqlDerivedResult, machineStatesResult, machinesResult, currentDashboardResult, materialChangesResult] = await Promise.all([
           safeApi.get('/dashboard/overview'),
           safeApi.get('/predictions?limit=30&sort=desc'),
           safeApi.get('/ai/status'),
@@ -68,6 +71,7 @@ export default function Dashboard() {
           safeApi.get('/machine-state/states/current'),
           safeApi.get('/machines'), // Fetch machines list to match names with IDs
           safeApi.get(`/dashboard/current?material_id=${encodeURIComponent(selectedMaterial)}`), // Single source of truth for dashboard data
+          safeApi.get('/dashboard/material/changes?limit=50'), // Fetch material change events for chart markers
         ]);
         
         if (!mountedRef.current) return;
@@ -108,6 +112,11 @@ export default function Dashboard() {
           if (currentDashboardResult.data.machine_state) {
             setMachineState(currentDashboardResult.data.machine_state);
           }
+        }
+        
+        // Update material changes for chart markers
+        if (materialChangesResult.data && materialChangesResult.data.material_changes) {
+          setMaterialChanges(materialChangesResult.data.material_changes || []);
         }
         
         // Update machine states
@@ -336,8 +345,20 @@ export default function Dashboard() {
                 <label className="block text-xs font-medium text-slate-500 mb-1">Material</label>
                 <select
                   value={selectedMaterial}
-                  onChange={(e) => {
-                    setSelectedMaterial(e.target.value);
+                  onChange={async (e) => {
+                    const newMaterial = e.target.value;
+                    const oldMaterial = selectedMaterial;
+                    
+                    // Log material change to backend
+                    try {
+                      await safeApi.post(`/dashboard/material/change?material_id=${encodeURIComponent(newMaterial)}${oldMaterial ? `&previous_material=${encodeURIComponent(oldMaterial)}` : ''}`);
+                    } catch (error) {
+                      console.error('Failed to log material change:', error);
+                      // Continue even if logging fails
+                    }
+                    
+                    setPreviousMaterial(oldMaterial);
+                    setSelectedMaterial(newMaterial);
                     // Trigger data reload when material changes
                     lastFetchRef.current = 0;
                     fetchDashboardData(false);
@@ -568,6 +589,140 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Sensor Charts Section - UI Contract Implementation */}
+        {machineState === 'PRODUCTION' && currentDashboardData?.baseline_status === 'ready' && (() => {
+          // Prepare historical data for ScrewSpeed_rpm
+          const screwSpeedHistorical = (mssqlRows || []).map((row: any, index: number) => ({
+            timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+            value: parseFloat(row.ScrewSpeed_rpm) || 0,
+          })).filter((d: any) => d.value > 0);
+
+          // Prepare historical data for Pressure_bar
+          const pressureHistorical = (mssqlRows || []).map((row: any, index: number) => ({
+            timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+            value: parseFloat(row.Pressure_bar) || 0,
+          })).filter((d: any) => d.value > 0);
+
+          // Prepare historical data for Temp_Avg
+          const tempAvgHistorical = (mssqlRows || []).map((row: any, index: number) => {
+            const temps = [
+              parseFloat(row.Temp_Zone1_C),
+              parseFloat(row.Temp_Zone2_C),
+              parseFloat(row.Temp_Zone3_C),
+              parseFloat(row.Temp_Zone4_C),
+            ].filter((t): t is number => !isNaN(t) && t > 0);
+            const avg = temps.length > 0 ? temps.reduce((a, b) => a + b, 0) / temps.length : 0;
+            return {
+              timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+              value: avg,
+            };
+          }).filter((d: any) => d.value > 0);
+
+          return (
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold text-slate-900 mb-4">Sensor Charts (Baseline Comparison)</h2>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* ScrewSpeed_rpm Chart */}
+                <SensorChart
+                  key="ScrewSpeed_rpm"
+                  sensorName="Schneckendrehzahl (ScrewSpeed_rpm)"
+                  currentValue={currentDashboardData?.metrics?.ScrewSpeed_rpm?.current_value}
+                  baselineMean={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline_mean}
+                  greenBand={currentDashboardData?.metrics?.ScrewSpeed_rpm?.green_band}
+                  historicalData={screwSpeedHistorical}
+                  severity={currentDashboardData?.metrics?.ScrewSpeed_rpm?.severity}
+                  deviation={currentDashboardData?.metrics?.ScrewSpeed_rpm?.deviation}
+                  baselineMaterial={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_material || null}
+                  stability={currentDashboardData?.metrics?.ScrewSpeed_rpm?.stability || null}
+                  materialChanges={materialChanges}
+                  unit="rpm"
+                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  isInProduction={machineState === 'PRODUCTION'}
+                  height={300}
+                />
+
+                {/* Pressure_bar Chart */}
+                <SensorChart
+                  key="Pressure_bar"
+                  sensorName="Schmelzedruck (Pressure_bar)"
+                  currentValue={currentDashboardData?.metrics?.Pressure_bar?.current_value}
+                  baselineMean={currentDashboardData?.metrics?.Pressure_bar?.baseline_mean}
+                  greenBand={currentDashboardData?.metrics?.Pressure_bar?.green_band}
+                  historicalData={pressureHistorical}
+                  severity={currentDashboardData?.metrics?.Pressure_bar?.severity}
+                  deviation={currentDashboardData?.metrics?.Pressure_bar?.deviation}
+                  baselineMaterial={currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_material || null}
+                  stability={currentDashboardData?.metrics?.Pressure_bar?.stability || null}
+                  materialChanges={materialChanges}
+                  unit="bar"
+                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  isInProduction={machineState === 'PRODUCTION'}
+                  height={300}
+                />
+
+                {/* Temperature Zones Charts */}
+                {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => {
+                  const zoneKey = `Temp_${zone}`;
+                  const zoneHistorical = (mssqlRows || []).map((row: any, idx: number) => ({
+                    timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - idx) * 60000),
+                    value: parseFloat(row[zoneKey]) || 0,
+                  })).filter((d: any) => d.value > 0);
+
+                  const metricData = currentDashboardData?.metrics?.[zoneKey] || null;
+                  const baselineMean = metricData?.baseline_mean || null;
+                  const greenBand = metricData?.green_band || null;
+                  const currentValue = metricData?.current_value || parseFloat(mssqlRows?.[0]?.[zoneKey]) || null;
+                  const severity = metricData?.severity ?? (mssqlDerived?.risk?.sensors[zoneKey] === 'red' ? 2 : 
+                                                           mssqlDerived?.risk?.sensors[zoneKey] === 'yellow' ? 1 :
+                                                           mssqlDerived?.risk?.sensors[zoneKey] === 'green' ? 0 : null);
+                  const deviation = metricData?.deviation || null;
+                  const baselineMaterial = metricData?.baseline?.baseline_material || null;
+                  const stability = metricData?.stability || null;
+
+                  return (
+                    <SensorChart
+                      key={zoneKey}
+                      sensorName={`Temperatur Zone ${index + 1} (${zoneKey})`}
+                      currentValue={currentValue}
+                      baselineMean={baselineMean}
+                      greenBand={greenBand}
+                      historicalData={zoneHistorical}
+                      severity={severity}
+                      deviation={deviation}
+                      baselineMaterial={baselineMaterial}
+                      stability={stability}
+                      materialChanges={materialChanges}
+                      unit="°C"
+                      baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                      isInProduction={machineState === 'PRODUCTION'}
+                      height={300}
+                    />
+                  );
+                })}
+
+                {/* Temp_Avg Chart */}
+                <SensorChart
+                  key="Temp_Avg"
+                  sensorName="Durchschnittstemperatur (Temp_Avg)"
+                  currentValue={currentDashboardData?.metrics?.Temp_Avg?.current_value || mssqlDerived?.derived?.Temp_Avg?.current}
+                  baselineMean={currentDashboardData?.metrics?.Temp_Avg?.baseline_mean}
+                  greenBand={currentDashboardData?.metrics?.Temp_Avg?.green_band}
+                  historicalData={tempAvgHistorical}
+                  severity={currentDashboardData?.metrics?.Temp_Avg?.severity}
+                  deviation={currentDashboardData?.metrics?.Temp_Avg?.deviation}
+                  baselineMaterial={currentDashboardData?.metrics?.Temp_Avg?.baseline?.baseline_material || null}
+                  stability={currentDashboardData?.metrics?.Temp_Avg?.stability || null}
+                  materialChanges={materialChanges}
+                  unit="°C"
+                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  isInProduction={machineState === 'PRODUCTION'}
+                  height={300}
+                />
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="mb-6">
           <h2 className="text-xl font-semibold text-slate-900 mb-4">Temperaturzonen (Zone 1–4)</h2>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
@@ -623,11 +778,15 @@ export default function Dashboard() {
             <div className="text-xs text-slate-500 mb-4">
               <strong>Referenz:</strong>
               <br />
-              <span className="ml-2">🟢 Optimal: stability_ratio ≤ 1.2</span>
+              <span className="ml-2">🟢 Stable: stability_ratio ≤ 1.2</span>
               <br />
-              <span className="ml-2">🟠 Acceptable: 1.2 &lt; stability_ratio ≤ 2.0</span>
+              <span className="ml-2">🟠 Fluctuating: 1.2 &lt; stability_ratio ≤ 1.6</span>
               <br />
-              <span className="ml-2">🔴 Critical: stability_ratio &gt; 2.0</span>
+              <span className="ml-2">🔴 Unstable: stability_ratio &gt; 1.6</span>
+              <br />
+              <span className="ml-2 italic text-slate-400">
+                Tooltip: Increased fluctuation compared to baseline
+              </span>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div>

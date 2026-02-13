@@ -18,8 +18,65 @@ from app.models.sensor import Sensor
 from app.models.prediction import Prediction
 from app.models.alarm import Alarm
 from app.models.sensor_data import SensorData
+from app.utils.baseline_formatter import build_standardized_baseline, build_standardized_baseline_from_dict
+from app.services import audit_service
+from app.schemas.audit_log import AuditLogCreate
+from uuid import UUID
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+def apply_decision_hierarchy(
+    *,
+    rule_based_severity: int,
+    stability_severity: Optional[int],
+    ml_anomaly_score: Optional[float],
+    ml_threshold: float = 0.7,
+) -> Tuple[int, bool]:
+    """
+    Rule vs ML Priority Decision Hierarchy (4-step chain)
+    
+    STEP 1: Machine state gate (handled by caller - must be PRODUCTION)
+    STEP 2: Material rule-based thresholds - IF value outside baseline → return yellow/red
+    STEP 3: Stability/trend indicators - IF stability orange/red → override value inside band
+    STEP 4: ML signal (Isolation Forest) - IF ml_score > threshold → only add "warning", do NOT set red status
+    
+    Args:
+        rule_based_severity: Severity from rule-based thresholds (0=GREEN, 1=ORANGE, 2=RED, -1=UNKNOWN)
+        stability_severity: Stability severity (0=GREEN, 1=ORANGE, 2=RED, None=UNKNOWN)
+        ml_anomaly_score: ML anomaly score from Isolation Forest (0.0-1.0, None if not available)
+        ml_threshold: Threshold for ML warning (default 0.7)
+    
+    Returns:
+        Tuple of (final_severity: int, ml_warning: bool)
+        - final_severity: Final severity after applying hierarchy (0, 1, 2, or -1)
+        - ml_warning: True if ML detected anomaly (but did not change status)
+    """
+    # STEP 2: Material rule-based thresholds
+    # IF value outside baseline → return yellow/red
+    final_severity = rule_based_severity
+    
+    # STEP 3: Stability/trend indicators override
+    # IF stability orange/red → override value inside band
+    if stability_severity is not None and stability_severity >= 1:
+        # Stability is orange (1) or red (2)
+        # Override: if rule-based severity is GREEN (0) but stability is orange/red, upgrade to at least orange
+        if final_severity == 0 and stability_severity >= 1:
+            final_severity = stability_severity  # Use stability severity (1=orange or 2=red)
+        # If rule-based is already orange/red, keep the higher severity
+        elif final_severity >= 0 and stability_severity > final_severity:
+            final_severity = stability_severity
+    
+    # STEP 4: ML signal (Isolation Forest)
+    # IF ml_score > threshold → only add "warning", do NOT set red status
+    ml_warning = False
+    if ml_anomaly_score is not None and ml_anomaly_score > ml_threshold:
+        ml_warning = True
+        # ML can only add context (warning), never set red status
+        # If final_severity is GREEN (0), ML warning does NOT upgrade to orange/red
+        # ML warning is informational only - it does not change the final status
+    
+    return final_severity, ml_warning
 
 
 _extruder_last_attempt_at: datetime | None = None
@@ -395,20 +452,105 @@ async def get_extruder_derived_kpis(
 
     # Check machine state - only calculate baselines/risk in PRODUCTION
     from app.services.machine_state_manager import MachineStateService
+    from sqlalchemy import select as sql_select  # Explicit import to avoid UnboundLocalError
     state_service = MachineStateService(session)
     
     # Get the extruder machine (assuming single machine for now)
-    machines = await session.scalars(select(Machine).where(Machine.name == "Extruder-SQL").limit(1))
+    machines = await session.scalars(sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1))
     machine = machines.first()
     
     is_in_production = False
     current_state = None
     machine_state_str = "UNKNOWN"
+    machine_id = None
     if machine:
+        machine_id = machine.id
         current_state = await state_service.get_current_state(str(machine.id))
         if current_state:
             machine_state_str = current_state.state.value
             is_in_production = (machine_state_str == "PRODUCTION")
+    
+    # STEP 1: Machine state gate
+    # IF machine_state != PRODUCTION → return "no evaluation"
+    if not is_in_production:
+        return {
+            "window_minutes": window_minutes,
+            "rows": rows,
+            "baseline": {},
+            "baselines_standardized": {},
+            "derived": {},
+            "risk": {"overall": "unknown", "sensors": {}},
+            "risk_score": None,
+            "severity": {"overall": -1, "sensors": {}},
+            "stability_severity": {},
+            "stability_state": "unknown",
+            "ml_warning": False,  # No ML warning when not in PRODUCTION
+            "risk_components": {},
+            "overall_text": f"[{machine_state_str}] Process evaluation disabled - machine not in PRODUCTION state",
+            "machine_state": machine_state_str,
+            "evaluation_enabled": False,
+            "profile_id": None,
+            "baseline_ready": False,
+        }
+    
+    # Fetch latest ML predictions for ML warning detection (STEP 4)
+    ml_predictions = {}
+    ml_warning_overall = False
+    if machine_id:
+        try:
+            # Get latest predictions for this machine (within last 30 minutes)
+            cutoff_time = datetime.utcnow() - timedelta(minutes=30)
+            predictions_result = await session.execute(
+                sql_select(Prediction)
+                .where(
+                    and_(
+                        Prediction.machine_id == machine_id,
+                        Prediction.timestamp >= cutoff_time
+                    )
+                )
+                .order_by(Prediction.timestamp.desc())
+                .limit(10)
+            )
+            latest_predictions = predictions_result.scalars().all()
+            
+            # Extract ML anomaly scores per sensor/metric
+            for pred in latest_predictions:
+                # Use sensor name or metric from metadata to map to our sensor keys
+                sensor_name = None
+                if pred.sensor_id:
+                    sensor_result = await session.execute(
+                        sql_select(Sensor).where(Sensor.id == pred.sensor_id)
+                    )
+                    sensor = sensor_result.scalar_one_or_none()
+                    if sensor:
+                        sensor_name = sensor.name
+                
+                # Get anomaly score (from score field or metadata)
+                anomaly_score = float(pred.score) if pred.score else 0.0
+                if pred.metadata_json and isinstance(pred.metadata_json, dict):
+                    # Check metadata for anomaly_score
+                    meta_score = pred.metadata_json.get("anomaly_score")
+                    if meta_score is not None:
+                        try:
+                            anomaly_score = float(meta_score)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Map sensor to our metric keys (e.g., "Pressure" -> "Pressure_bar")
+                if sensor_name:
+                    # Try to match sensor name to our metric keys
+                    for metric_key in ["Pressure_bar", "ScrewSpeed_rpm", "Temp_Zone1_C", "Temp_Zone2_C", "Temp_Zone3_C", "Temp_Zone4_C"]:
+                        if sensor_name.lower().replace("_", "").replace("-", "") in metric_key.lower().replace("_", ""):
+                            if metric_key not in ml_predictions or anomaly_score > ml_predictions[metric_key]:
+                                ml_predictions[metric_key] = anomaly_score
+                                break
+                
+                # Also check overall ML warning (any prediction with high score)
+                if anomaly_score > 0.7:  # ML threshold
+                    ml_warning_overall = True
+        except Exception as e:
+            logger.debug(f"Failed to fetch ML predictions for ML warning: {e}")
+            # Non-blocking: continue without ML warnings if fetch fails
     
     if not rows:
         return {
@@ -592,7 +734,7 @@ async def get_extruder_derived_kpis(
             if active_profile and active_profile.baseline_ready:
                 # Load scoring bands for this profile
                 bands_result = await session.execute(
-                    select(ProfileScoringBand)
+                    sql_select(ProfileScoringBand)
                     .where(ProfileScoringBand.profile_id == active_profile.id)
                 )
                 bands = bands_result.scalars().all()
@@ -605,40 +747,67 @@ async def get_extruder_derived_kpis(
                 
                 # Load baseline stats from finalized baseline
                 baseline_stats_result = await session.execute(
-                    select(ProfileBaselineStats)
+                    sql_select(ProfileBaselineStats)
                     .where(ProfileBaselineStats.profile_id == active_profile.id)
                 )
                 baseline_stats = baseline_stats_result.scalars().all()
+                profile_baseline_stats_dict = {}  # Store for standardized baseline
                 for bs in baseline_stats:
                     profile_baselines[bs.metric_name] = {
                         "mean": bs.baseline_mean,
                         "std": bs.baseline_std,
                     }
+                    profile_baseline_stats_dict[bs.metric_name] = bs  # Store for standardized baseline
     except Exception as e:
         logger.error(f"Error loading profile in /extruder/derived: {e}")
         # Continue without profile - will use fallback baselines
         active_profile = None
+        profile_baseline_stats_dict = {}  # Initialize empty dict if profile loading fails
+    else:
+        # Initialize if not set in try block
+        if 'profile_baseline_stats_dict' not in locals():
+            profile_baseline_stats_dict = {}
 
     # Step 3.6: Stability Evaluation (std dev vs baseline std dev)
     # Stability = current_std / baseline_std
-    # GREEN: ratio ≤ 1.2, ORANGE: ratio ≤ 1.8, RED: ratio > 1.8
+    # Window: last 10 minutes (sliding window)
+    # GREEN: ratio ≤ 1.2, ORANGE: 1.2 < ratio ≤ 1.6, RED: ratio > 1.6
     stability_evaluation = {}
     stability_severity = {}
     
-    # Metrics to evaluate for stability (RPM, Pressure, optional Temperature)
+    # Metrics to evaluate for stability (all baseline-supported sensors + derived Temp_Avg)
     stability_metrics = {
         "ScrewSpeed_rpm": "RPM stability",
         "Pressure_bar": "Pressure stability",
-        "Temp_Avg": "Temperature stability",  # Optional
+        "Temp_Zone1_C": "Temp Zone 1 stability",
+        "Temp_Zone2_C": "Temp Zone 2 stability",
+        "Temp_Zone3_C": "Temp Zone 3 stability",
+        "Temp_Zone4_C": "Temp Zone 4 stability",
+        "Temp_Avg": "Temperature stability",  # Derived average
     }
+    
+    # Define 10-minute sliding window for stability evaluation
+    now_dt = datetime.utcnow()
+    ten_min_ago = now_dt - timedelta(minutes=10)
     
     for metric_key, metric_label in stability_metrics.items():
         # Get current window std dev
+        # Only use data from the last 10 minutes
         if metric_key == "Temp_Avg":
             # Use Temp_Avg values from rows
-            current_vals = [r.get("Temp_Avg") for r in rows if r.get("Temp_Avg") is not None]
+            current_vals = [
+                r.get("Temp_Avg")
+                for r in rows
+                if r.get("Temp_Avg") is not None and r.get("TrendDate") and r.get("TrendDate") >= ten_min_ago
+            ]
         else:
-            current_vals = [as_float(r.get(metric_key)) for r in rows if as_float(r.get(metric_key)) is not None]
+            current_vals = [
+                as_float(r.get(metric_key))
+                for r in rows
+                if as_float(r.get(metric_key)) is not None
+                and r.get("TrendDate")
+                and r.get("TrendDate") >= ten_min_ago
+            ]
         
         if len(current_vals) < 2:
             stability_evaluation[metric_key] = {
@@ -679,11 +848,11 @@ async def get_extruder_derived_kpis(
         
         # Determine severity: 0 = GREEN, 1 = ORANGE, 2 = RED
         if ratio <= 1.2:
-            severity = 0  # GREEN
-        elif ratio <= 1.8:
-            severity = 1  # ORANGE
+            severity = 0  # GREEN / stable
+        elif ratio <= 1.6:
+            severity = 1  # ORANGE / fluctuating
         else:
-            severity = 2  # RED
+            severity = 2  # RED / unstable
         
         stability_evaluation[metric_key] = {
             "current_std": round(current_std, 3),
@@ -767,9 +936,11 @@ async def get_extruder_derived_kpis(
             # Unknown mode - fallback
             return -1
     
-    # Calculate severity for each sensor
+    # Calculate severity for each sensor using Decision Hierarchy
     risk_sensors = {}
-    severity_sensors = {}  # Numeric severity (0, 1, 2)
+    severity_sensors = {}  # Numeric severity (0, 1, 2) - after applying decision hierarchy
+    severity_sensors_rule_based = {}  # Rule-based severity before hierarchy (for debugging)
+    ml_warnings_per_sensor = {}  # ML warning per sensor
     current_row = rows[-1] if rows else {}
     for key in sensor_keys:
         val = as_float(current_row.get(key))
@@ -780,20 +951,38 @@ async def get_extruder_derived_kpis(
         if key in profile_baselines:
             mean = profile_baselines[key]["mean"]
         
-        severity = calculate_severity(val, key, mean)
-        severity_sensors[key] = severity
+        # STEP 2: Calculate rule-based severity (material thresholds)
+        rule_based_severity = calculate_severity(val, key, mean)
+        severity_sensors_rule_based[key] = rule_based_severity
+        
+        # Get stability severity for this sensor
+        stability_sev = stability_severity.get(key, None)
+        
+        # Get ML anomaly score for this sensor
+        ml_score = ml_predictions.get(key, None)
+        
+        # Apply Decision Hierarchy (STEP 2, 3, 4)
+        final_severity, ml_warning = apply_decision_hierarchy(
+            rule_based_severity=rule_based_severity,
+            stability_severity=stability_sev,
+            ml_anomaly_score=ml_score,
+            ml_threshold=0.7,
+        )
+        
+        severity_sensors[key] = final_severity
+        ml_warnings_per_sensor[key] = ml_warning
         
         # Convert to string for backward compatibility
-        if severity == 0:
+        if final_severity == 0:
             risk_sensors[key] = "green"
-        elif severity == 1:
+        elif final_severity == 1:
             risk_sensors[key] = "orange"
-        elif severity == 2:
+        elif final_severity == 2:
             risk_sensors[key] = "red"
         else:
             risk_sensors[key] = "unknown"
     
-    # Calculate severity for derived metrics (Temp_Avg, Temp_Spread) for weighted risk score
+    # Calculate severity for derived metrics (Temp_Avg, Temp_Spread) using Decision Hierarchy
     # Temp_Avg severity
     temp_avg_val = current_row.get("Temp_Avg")
     if temp_avg_val is not None:
@@ -801,8 +990,20 @@ async def get_extruder_derived_kpis(
         temp_avg_mean = temp_avg_base.get("mean")
         if temp_avg_mean is None and "Temp_Avg" in profile_baselines:
             temp_avg_mean = profile_baselines["Temp_Avg"]["mean"]
-        temp_avg_severity = calculate_severity(temp_avg_val, "Temp_Avg", temp_avg_mean)
-        severity_sensors["Temp_Avg"] = temp_avg_severity
+        rule_based_temp_avg = calculate_severity(temp_avg_val, "Temp_Avg", temp_avg_mean)
+        severity_sensors_rule_based["Temp_Avg"] = rule_based_temp_avg
+        
+        # Apply Decision Hierarchy
+        temp_avg_stability = stability_severity.get("Temp_Avg", None)
+        temp_avg_ml = ml_predictions.get("Temp_Avg", None)
+        temp_avg_final, temp_avg_ml_warn = apply_decision_hierarchy(
+            rule_based_severity=rule_based_temp_avg,
+            stability_severity=temp_avg_stability,
+            ml_anomaly_score=temp_avg_ml,
+            ml_threshold=0.7,
+        )
+        severity_sensors["Temp_Avg"] = temp_avg_final
+        ml_warnings_per_sensor["Temp_Avg"] = temp_avg_ml_warn
     
     # Temp_Spread severity
     temp_spread_val = current_row.get("Temp_Spread")
@@ -819,8 +1020,20 @@ async def get_extruder_derived_kpis(
                     all_spreads.append(max(temps) - min(temps))
             if all_spreads:
                 temp_spread_mean = statistics.mean(all_spreads)
-        temp_spread_severity = calculate_severity(temp_spread_val, "Temp_Spread", temp_spread_mean)
-        severity_sensors["Temp_Spread"] = temp_spread_severity
+        rule_based_temp_spread = calculate_severity(temp_spread_val, "Temp_Spread", temp_spread_mean)
+        severity_sensors_rule_based["Temp_Spread"] = rule_based_temp_spread
+        
+        # Apply Decision Hierarchy
+        temp_spread_stability = stability_severity.get("Temp_Spread", None)
+        temp_spread_ml = ml_predictions.get("Temp_Spread", None)
+        temp_spread_final, temp_spread_ml_warn = apply_decision_hierarchy(
+            rule_based_severity=rule_based_temp_spread,
+            stability_severity=temp_spread_stability,
+            ml_anomaly_score=temp_spread_ml,
+            ml_threshold=0.7,
+        )
+        severity_sensors["Temp_Spread"] = temp_spread_final
+        ml_warnings_per_sensor["Temp_Spread"] = temp_spread_ml_warn
     
     # Overall Risk Calculation: Weighted Risk Score
     # risk_score = 25 * pressure_severity + 25 * temp_spread_severity + 25 * stability_severity + 25 * temp_avg_severity
@@ -856,27 +1069,42 @@ async def get_extruder_derived_kpis(
         risk_score = max(0, min(100, risk_score))
     
     # Determine overall risk color from risk_score
+    # Process Status: Worst sensor status = process status (ML warnings do NOT change status)
     if risk_score is not None:
         if risk_score <= 33:
             overall_risk = "green"
             overall_severity = 0
+            process_status = "green"
+            process_status_text = "Process stable"
         elif risk_score <= 66:
             overall_risk = "orange"
             overall_severity = 1
+            process_status = "orange"
+            process_status_text = "Process drifting from baseline"
         else:
             overall_risk = "red"
             overall_severity = 2
+            process_status = "red"
+            process_status_text = "High risk of instability or scrap"
     else:
         # Fallback to worst sensor risk if weighted calculation not possible
         overall_severity = max(severity_sensors.values()) if severity_sensors else -1
         if overall_severity == 0:
             overall_risk = "green"
+            process_status = "green"
+            process_status_text = "Process stable"
         elif overall_severity == 1:
             overall_risk = "orange"
+            process_status = "orange"
+            process_status_text = "Process drifting from baseline"
         elif overall_severity == 2:
             overall_risk = "red"
+            process_status = "red"
+            process_status_text = "High risk of instability or scrap"
         else:
             overall_risk = "unknown"
+            process_status = "unknown"
+            process_status_text = "System status unknown"
 
     # Explanations per sensor (using ProfileMessageTemplate if available)
     from app.models.profile import ProfileMessageTemplate
@@ -948,24 +1176,65 @@ async def get_extruder_derived_kpis(
     
     # Add state context to overall text
     overall_text = f"[PRODUCTION] {overall_text}"
+    
+    # Map overall stability severity (based on pressure stability or average) to human-readable state
+    if stability_severity_val == 0:
+        stability_state = "green"
+    elif stability_severity_val == 1:
+        stability_state = "orange"
+    elif stability_severity_val == 2:
+        stability_state = "red"
+    else:
+        stability_state = "unknown"
+    
+    # Build standardized baseline structures for all sensors
+    standardized_baselines = {}
+    # Note: Temp_Spread is NOT included - it uses fixed thresholds (5°C, 8°C), not baseline
+    sensor_keys_for_baseline = ["ScrewSpeed_rpm", "Pressure_bar", "Temp_Zone1_C", "Temp_Zone2_C", "Temp_Zone3_C", "Temp_Zone4_C", "Temp_Avg"]
+    for sensor_key in sensor_keys_for_baseline:
+        baseline_stat = profile_baseline_stats_dict.get(sensor_key) if profile_baseline_stats_dict else None
+        if baseline_stat and active_profile:
+            # Use ProfileBaselineStats if available
+            standardized_baselines[sensor_key] = build_standardized_baseline(
+                baseline_stat=baseline_stat,
+                profile=active_profile,
+            )
+        elif sensor_key in baseline and baseline[sensor_key].get("mean") is not None:
+            # Fallback: Use rolling baseline data
+            standardized_baselines[sensor_key] = build_standardized_baseline_from_dict(
+                metric_name=sensor_key,
+                baseline_data=baseline[sensor_key],
+                material_id=active_profile.material_id if active_profile else None,
+                confidence=0.8 if baseline[sensor_key].get("count", 0) >= 30 else 0.6,  # Lower confidence for rolling baseline
+            )
 
+    # Determine overall ML warning (any sensor has ML warning)
+    ml_warning_overall = any(ml_warnings_per_sensor.values()) or ml_warning_overall
+    
     # This return is only reached when is_in_production is True (early return above handles non-PRODUCTION)
     return {
         "window_minutes": window_minutes,
         "rows": rows,
         "baseline": baseline,
+        "baselines_standardized": standardized_baselines,  # Add standardized baseline structures
         "derived": derived,
         "risk": {"overall": overall_risk, "sensors": risk_sensors},
         "risk_score": risk_score,  # Weighted risk score (0-100) or None if not in PRODUCTION
-        "severity": {"overall": overall_severity, "sensors": severity_sensors},  # Numeric severity (0, 1, 2)
-        "stability_severity": stability_severity,  # Stability severity scores (0, 1, 2)
+        "severity": {"overall": overall_severity, "sensors": severity_sensors},  # Numeric severity (0, 1, 2) - after decision hierarchy
+        "severity_rule_based": severity_sensors_rule_based,  # Rule-based severity before hierarchy (for debugging)
+        "stability_severity": stability_severity,  # Per-sensor stability severity scores (0, 1, 2)
+        "stability_state": stability_state,  # Overall stability state: green | orange | red | unknown
+        "ml_warning": ml_warning_overall,  # Overall ML warning flag (True if any ML anomaly detected)
+        "ml_warnings": ml_warnings_per_sensor,  # Per-sensor ML warning flags
         "risk_components": {  # Individual components for debugging
             "pressure_severity": pressure_severity,
             "temp_spread_severity": temp_spread_severity,
             "stability_severity": stability_severity_val,
             "temp_avg_severity": temp_avg_severity,
         },
-        "overall_text": overall_text,  # Overall text derived from highest severity metric
+        "overall_text": overall_text,  # Overall text derived from highest severity metric (kept for backward compatibility)
+        "process_status": process_status,  # Process status: "green" | "orange" | "red" | "unknown" (worst sensor status, ML warnings do NOT change this)
+        "process_status_text": process_status_text,  # Process status text: "Process stable" | "Process drifting from baseline" | "High risk of instability or scrap"
         "machine_state": machine_state_str,
         "evaluation_enabled": True,
         "profile_id": str(active_profile.id) if active_profile else None,
@@ -990,9 +1259,10 @@ async def get_current_dashboard_data(
     from app.services.machine_state_manager import MachineStateService
     from app.services.baseline_learning_service import baseline_learning_service
     from app.models.profile import ProfileBaselineStats, ProfileScoringBand
+    from sqlalchemy import select as sql_select  # Explicit import to avoid UnboundLocalError
     
     # Get the extruder machine (assuming single machine for now)
-    machines = await session.scalars(select(Machine).where(Machine.name == "Extruder-SQL").limit(1))
+    machines = await session.scalars(sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1))
     machine = machines.first()
     
     if not machine:
@@ -1111,6 +1381,68 @@ async def get_current_dashboard_data(
     state_confidence = current_state.confidence
     state_since_ts = current_state.state_since.isoformat() if current_state.state_since else None
     is_in_production = (machine_state_str == "PRODUCTION")
+    
+    # STEP 1: Machine state gate - only evaluate in PRODUCTION
+    # Note: We still return data for non-PRODUCTION states, but with neutral/disabled evaluation
+    
+    # Fetch latest ML predictions for ML warning detection (STEP 4)
+    ml_predictions = {}
+    ml_warning_overall = False
+    if is_in_production and machine:
+        try:
+            # Get latest predictions for this machine (within last 30 minutes)
+            cutoff_time = datetime.utcnow() - timedelta(minutes=30)
+            predictions_result = await session.execute(
+                sql_select(Prediction)
+                .where(
+                    and_(
+                        Prediction.machine_id == machine.id,
+                        Prediction.timestamp >= cutoff_time
+                    )
+                )
+                .order_by(Prediction.timestamp.desc())
+                .limit(10)
+            )
+            latest_predictions = predictions_result.scalars().all()
+            
+            # Extract ML anomaly scores per sensor/metric
+            for pred in latest_predictions:
+                # Use sensor name or metric from metadata to map to our sensor keys
+                sensor_name = None
+                if pred.sensor_id:
+                    sensor_result = await session.execute(
+                        sql_select(Sensor).where(Sensor.id == pred.sensor_id)
+                    )
+                    sensor = sensor_result.scalar_one_or_none()
+                    if sensor:
+                        sensor_name = sensor.name
+                
+                # Get anomaly score (from score field or metadata)
+                anomaly_score = float(pred.score) if pred.score else 0.0
+                if pred.metadata_json and isinstance(pred.metadata_json, dict):
+                    # Check metadata for anomaly_score
+                    meta_score = pred.metadata_json.get("anomaly_score")
+                    if meta_score is not None:
+                        try:
+                            anomaly_score = float(meta_score)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Map sensor to our metric keys (e.g., "Pressure" -> "Pressure_bar")
+                if sensor_name:
+                    # Try to match sensor name to our metric keys
+                    for metric_key in ["Pressure_bar", "ScrewSpeed_rpm", "Temp_Zone1_C", "Temp_Zone2_C", "Temp_Zone3_C", "Temp_Zone4_C", "Temp_Avg", "Temp_Spread"]:
+                        if sensor_name.lower().replace("_", "").replace("-", "") in metric_key.lower().replace("_", ""):
+                            if metric_key not in ml_predictions or anomaly_score > ml_predictions[metric_key]:
+                                ml_predictions[metric_key] = anomaly_score
+                                break
+                
+                # Also check overall ML warning (any prediction with high score)
+                if anomaly_score > 0.7:  # ML threshold
+                    ml_warning_overall = True
+        except Exception as e:
+            logger.debug(f"Failed to fetch ML predictions for ML warning in /current: {e}")
+            # Non-blocking: continue without ML warnings if fetch fails
     
     # Get active profile - use material_id from query param or fallback to machine metadata
     if not material_id:
@@ -1371,10 +1703,13 @@ async def get_current_dashboard_data(
     
     # Load profile baselines and scoring bands
     profile_baselines = {}
+    profile_baseline_stats_dict = {}  # Store full ProfileBaselineStats objects for standardized baseline
     scoring_bands = {}
     if active_profile and active_profile.baseline_ready:
+        # Use sql_select to avoid UnboundLocalError
+        from sqlalchemy import select as sql_select
         baseline_stats_result = await session.execute(
-            select(ProfileBaselineStats)
+            sql_select(ProfileBaselineStats)
             .where(ProfileBaselineStats.profile_id == active_profile.id)
         )
         for bs in baseline_stats_result.scalars().all():
@@ -1382,9 +1717,10 @@ async def get_current_dashboard_data(
                 "mean": bs.baseline_mean,
                 "std": bs.baseline_std,
             }
+            profile_baseline_stats_dict[bs.metric_name] = bs  # Store full object for standardized baseline
         
         bands_result = await session.execute(
-            select(ProfileScoringBand)
+            sql_select(ProfileScoringBand)
             .where(ProfileScoringBand.profile_id == active_profile.id)
         )
         for band in bands_result.scalars().all():
@@ -1393,6 +1729,41 @@ async def get_current_dashboard_data(
                 "green_limit": band.green_limit,
                 "orange_limit": band.orange_limit,
             }
+    
+    # Calculate severity function with 3-5% rule
+    def calculate_severity_with_band(value: Optional[float], metric_name: str, baseline_mean: Optional[float], green_band: Optional[Dict[str, float]]) -> Tuple[int, Optional[float]]:
+        """
+        Calculate severity using simple 3-5% rule:
+        - Inside band → green (0)
+        - Within 3–5% outside baseline → orange (1)
+        - More than 5% outside baseline → red (2)
+        
+        Returns: (severity, deviation_percent)
+        """
+        if value is None or baseline_mean is None or baseline_mean == 0:
+            return (-1, None)
+        
+        # Calculate percentage deviation from baseline mean
+        deviation_percent = abs((value - baseline_mean) / baseline_mean) * 100.0
+        
+        # Check if value is inside the green band
+        is_inside_band = False
+        if green_band and green_band.get("min") is not None and green_band.get("max") is not None:
+            if green_band["min"] <= value <= green_band["max"]:
+                is_inside_band = True
+        
+        # If inside band → green
+        if is_inside_band:
+            return (0, deviation_percent)  # GREEN - inside band
+        
+        # Value is outside the band - apply 3-5% rule based on deviation from baseline mean
+        if deviation_percent <= 3.0:
+            # Less than 3% deviation - still green even if slightly outside band
+            return (0, deviation_percent)  # GREEN
+        elif deviation_percent <= 5.0:
+            return (1, deviation_percent)  # ORANGE - 3-5% outside
+        else:
+            return (2, deviation_percent)  # RED - >5% outside
     
     # Calculate severity function (reuse from get_extruder_derived_kpis)
     def calculate_severity(value: Optional[float], metric_name: str, baseline_mean: Optional[float]) -> int:
@@ -1460,8 +1831,9 @@ async def get_current_dashboard_data(
             r["Temp_Spread"] = None
     
     # Calculate baselines for derived metrics
+    # Note: Temp_Spread does NOT use baseline - it uses fixed thresholds (5°C, 8°C)
     all_temp_avg = [r.get("Temp_Avg") for r in rows if r.get("Temp_Avg") is not None]
-    all_temp_spread = [r.get("Temp_Spread") for r in rows if r.get("Temp_Spread") is not None]
+    # Skip baseline calculation for Temp_Spread - it uses fixed thresholds, not baseline
     
     if all_temp_avg:
         baseline["Temp_Avg"] = {
@@ -1471,21 +1843,77 @@ async def get_current_dashboard_data(
             "max_normal": statistics.mean(all_temp_avg) + (statistics.stdev(all_temp_avg) if len(all_temp_avg) > 1 else 0.0),
         }
     
-    if all_temp_spread:
-        baseline["Temp_Spread"] = {
-            "mean": statistics.mean(all_temp_spread),
-            "std": statistics.stdev(all_temp_spread) if len(all_temp_spread) > 1 else 0.0,
-            "min_normal": statistics.mean(all_temp_spread) - (statistics.stdev(all_temp_spread) if len(all_temp_spread) > 1 else 0.0),
-            "max_normal": statistics.mean(all_temp_spread) + (statistics.stdev(all_temp_spread) if len(all_temp_spread) > 1 else 0.0),
-        }
+    # Temp_Spread does NOT get a baseline - it uses fixed thresholds: <=5°C green, 5-8°C orange, >8°C red
     
     # Build metrics response
     metrics_response = {}
     # Add all sensor keys plus derived metrics
     all_metric_keys = sensor_keys + ["Temp_Avg", "Temp_Spread"]
     
+    # Calculate stability severities for decision hierarchy (if in PRODUCTION)
+    stability_severity_dict = {}
+    if is_in_production and len(rows) >= 2:
+        # Calculate stability for each metric (simplified - use last 10 minutes if available)
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        ten_min_ago = now - timedelta(minutes=10)
+        recent_rows = [r for r in rows if r.get("TrendDate") and (isinstance(r.get("TrendDate"), datetime) and r.get("TrendDate") >= ten_min_ago or True)]  # Fallback to all if no timestamps
+        
+        for key in all_metric_keys:
+            recent_values = [as_float(r.get(key)) for r in recent_rows[-20:] if as_float(r.get(key)) is not None]  # Last 20 points
+            if len(recent_values) >= 3:
+                current_std = statistics.stdev(recent_values) if len(recent_values) > 1 else 0.0
+                baseline_std = base.get("std", 0.0) if (base := baseline.get(key, {})) else 0.0
+                if baseline_std > 0:
+                    ratio = current_std / baseline_std
+                    if ratio <= 1.2:
+                        stability_severity_dict[key] = 0  # GREEN
+                    elif ratio <= 1.6:
+                        stability_severity_dict[key] = 1  # ORANGE
+                    else:
+                        stability_severity_dict[key] = 2  # RED
+    
+    # Special handling for Temp_Spread: Fixed thresholds, no baseline
+    spread_status = None
+    
     for key in all_metric_keys:
         current_value = as_float(current_row.get(key))
+        
+        # SPECIAL HANDLING: Temp_Spread uses fixed thresholds, NOT baseline logic
+        if key == "Temp_Spread":
+            if current_value is not None:
+                # Fixed logic: spread <= 5°C → green, 5 < spread <= 8°C → orange, spread > 8°C → red
+                if current_value <= 5.0:
+                    rule_based_severity = 0  # GREEN
+                    spread_status = "green"
+                elif current_value <= 8.0:
+                    rule_based_severity = 1  # ORANGE
+                    spread_status = "orange"
+                else:
+                    rule_based_severity = 2  # RED
+                    spread_status = "red"
+            else:
+                rule_based_severity = -1  # UNKNOWN
+                spread_status = "unknown"
+            
+            # Temp_Spread does NOT use stability or ML in decision hierarchy (only fixed thresholds)
+            final_severity = rule_based_severity if is_in_production else rule_based_severity
+            ml_warning = False
+            
+            metrics_response[key] = {
+                "current_value": current_value,
+                "baseline_mean": None,  # No baseline for Temp_Spread
+                "green_band": None,  # No baseline band for Temp_Spread
+                "deviation": None,  # No deviation calculation for Temp_Spread
+                "deviation_percent": None,  # No deviation percent for Temp_Spread
+                "severity": final_severity,
+                "severity_rule_based": rule_based_severity,
+                "ml_warning": False,  # Temp_Spread doesn't use ML warnings
+                "baseline": None,  # No baseline structure for Temp_Spread
+            }
+            continue  # Skip normal processing for Temp_Spread
+        
+        # Normal processing for all other sensors (Temp_Zone1-4, Temp_Avg, ScrewSpeed, Pressure)
         base = baseline.get(key, {})
         baseline_mean = base.get("mean")
         
@@ -1493,15 +1921,12 @@ async def get_current_dashboard_data(
         if key in profile_baselines:
             baseline_mean = profile_baselines[key]["mean"]
         
-        # Calculate deviation
+        # Calculate deviation (absolute)
         deviation = None
         if current_value is not None and baseline_mean is not None:
             deviation = current_value - baseline_mean
         
-        # Calculate severity
-        severity = calculate_severity(current_value, key, baseline_mean)
-        
-        # Green band (from baseline or scoring band)
+        # Green band (from baseline or scoring band) - calculate BEFORE severity
         green_band = None
         if key in profile_baselines:
             std = profile_baselines[key].get("std", 0)
@@ -1516,12 +1941,84 @@ async def get_current_dashboard_data(
                 "max": base.get("max_normal"),
             }
         
+        # STEP 2: Calculate rule-based severity using 3-5% rule
+        # Use the new function that implements: inside band → green, 3-5% outside → orange, >5% outside → red
+        rule_based_severity, deviation_percent = calculate_severity_with_band(
+            current_value, key, baseline_mean, green_band
+        )
+        
+        # Fallback to old calculate_severity if new function returns -1 (no baseline)
+        if rule_based_severity == -1:
+            rule_based_severity = calculate_severity(current_value, key, baseline_mean)
+            # Calculate deviation_percent manually if not calculated
+            if deviation_percent is None and current_value is not None and baseline_mean is not None and baseline_mean != 0:
+                deviation_percent = abs((current_value - baseline_mean) / baseline_mean) * 100.0
+        
+        # Get stability severity for this sensor
+        stability_sev = stability_severity_dict.get(key, None) if is_in_production else None
+        
+        # Get ML anomaly score for this sensor
+        ml_score = ml_predictions.get(key, None) if is_in_production else None
+        
+        # Apply Decision Hierarchy (STEP 2, 3, 4) - only in PRODUCTION
+        if is_in_production:
+            final_severity, ml_warning = apply_decision_hierarchy(
+                rule_based_severity=rule_based_severity,
+                stability_severity=stability_sev,
+                ml_anomaly_score=ml_score,
+                ml_threshold=0.7,
+            )
+            if ml_warning:
+                ml_warning_overall = True
+        else:
+            # Not in PRODUCTION - use rule-based only, no ML warnings
+            final_severity = rule_based_severity
+            ml_warning = False
+        
+        severity = final_severity
+        
+        # Build standardized baseline structure
+        standardized_baseline = None
+        baseline_stat = profile_baseline_stats_dict.get(key)
+        if baseline_stat:
+            # Use ProfileBaselineStats if available
+            standardized_baseline = build_standardized_baseline(
+                baseline_stat=baseline_stat,
+                profile=active_profile,
+            )
+        elif baseline_mean is not None:
+            # Fallback: Use rolling baseline data
+            standardized_baseline = build_standardized_baseline_from_dict(
+                metric_name=key,
+                baseline_data=base,
+                material_id=active_profile.material_id if active_profile else None,
+                confidence=0.8 if base.get("count", 0) >= 30 else 0.6,  # Lower confidence for rolling baseline
+            )
+        
+        # Get stability state for this sensor (convert severity to state string)
+        stability_state_for_sensor = None
+        if key in stability_severity_dict:
+            stability_sev = stability_severity_dict[key]
+            if stability_sev == 0:
+                stability_state_for_sensor = "green"
+            elif stability_sev == 1:
+                stability_state_for_sensor = "orange"
+            elif stability_sev == 2:
+                stability_state_for_sensor = "red"
+            else:
+                stability_state_for_sensor = "unknown"
+        
         metrics_response[key] = {
             "current_value": current_value,
             "baseline_mean": baseline_mean,
             "green_band": green_band,
-            "deviation": deviation,
-            "severity": severity,
+            "deviation": deviation,  # Absolute deviation
+            "deviation_percent": round(deviation_percent, 2) if deviation_percent is not None else None,  # Percentage deviation
+            "severity": severity,  # Final severity after decision hierarchy
+            "severity_rule_based": rule_based_severity,  # Rule-based severity before hierarchy (for debugging)
+            "ml_warning": ml_warning if is_in_production else False,  # ML warning flag for this metric
+            "baseline": standardized_baseline,  # Add standardized baseline structure
+            "stability": stability_state_for_sensor,  # Stability state: "green" | "orange" | "red" | null
         }
     
     # Calculate overall risk and severity (reuse logic)
@@ -1530,16 +2027,25 @@ async def get_current_dashboard_data(
     severity_sensors = {key: metrics_response[key]["severity"] for key in all_metric_keys_for_severity if key in metrics_response and metrics_response[key]["severity"] >= 0}
     overall_severity = max(severity_sensors.values()) if severity_sensors else -1
     
+    # Process Status: Worst sensor status = process status (ML warnings do NOT change status)
     if overall_severity == 0:
         overall_risk = "green"
+        process_status = "green"
+        process_status_text = "Process stable"
     elif overall_severity == 1:
         overall_risk = "orange"
+        process_status = "orange"
+        process_status_text = "Process drifting from baseline"
     elif overall_severity == 2:
         overall_risk = "red"
+        process_status = "red"
+        process_status_text = "High risk of instability or scrap"
     else:
         overall_risk = "unknown"
+        process_status = "unknown"
+        process_status_text = "System status unknown"
     
-    # Get explanation text (from highest severity metric)
+    # Get explanation text (from highest severity metric) - kept for backward compatibility
     highest_severity = -1
     explanation_text = "System status unknown"
     for metric, severity in severity_sensors.items():
@@ -1558,12 +2064,110 @@ async def get_current_dashboard_data(
         "state_confidence": state_confidence,
         "state_since_ts": state_since_ts,
         "metrics": metrics_response,
-        "overall_risk": overall_risk,
+        "overall_risk": overall_risk,  # Kept for backward compatibility
         "overall_severity": overall_severity,
-        "explanation_text": explanation_text,
+        "process_status": process_status,  # Process status: "green" | "orange" | "red" | "unknown" (worst sensor status, ML warnings do NOT change this)
+        "process_status_text": process_status_text,  # Process status text: "Process stable" | "Process drifting from baseline" | "High risk of instability or scrap"
+        "ml_warning": ml_warning_overall if is_in_production else False,  # Overall ML warning flag (informational only, does NOT change process_status)
+        "explanation_text": explanation_text,  # Kept for backward compatibility
         "baseline_status": baseline_status,
         "profile_status": profile_status,
+        "evaluation_enabled": is_in_production,
+        "spread_status": spread_status,  # Temp_Spread status: "green" | "orange" | "red" | "unknown"
     }
+
+
+@router.post("/material/change")
+async def log_material_change(
+    material_id: str = Query(..., description="New material ID"),
+    machine_id: Optional[str] = Query(None, description="Machine ID (optional)"),
+    previous_material: Optional[str] = Query(None, description="Previous material ID (optional)"),
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_viewer),
+) -> Dict[str, Any]:
+    """
+    Log material change event with timestamp.
+    This endpoint is called when user changes material selection in UI.
+    """
+    from datetime import datetime
+    
+    try:
+        # Create audit log entry for material change
+        audit_data = AuditLogCreate(
+            user_id=str(current_user.id) if current_user else None,
+            action_type="material_change",
+            resource_type="material",
+            resource_id=material_id,
+            details=f"Material changed to {material_id}" + (f" (from {previous_material})" if previous_material else ""),
+            metadata={
+                "material_id": material_id,
+                "previous_material": previous_material,
+                "machine_id": machine_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
+        
+        await audit_service.create_audit_log(session, audit_data)
+        
+        logger.info(f"Material change logged: {previous_material} → {material_id} (user: {current_user.email if current_user else 'unknown'})")
+        
+        return {
+            "success": True,
+            "material_id": material_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"Material change to {material_id} logged successfully",
+        }
+    except Exception as e:
+        logger.error(f"Error logging material change: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to log material change: {str(e)}")
+
+
+@router.get("/material/changes")
+async def get_material_changes(
+    machine_id: Optional[str] = Query(None, description="Machine ID (optional filter)"),
+    start_date: Optional[datetime] = Query(None, description="Start date for filtering"),
+    end_date: Optional[datetime] = Query(None, description="End date for filtering"),
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of events to return"),
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_viewer),
+) -> Dict[str, Any]:
+    """
+    Get material change events for displaying vertical markers in charts.
+    Returns list of material change events with timestamp and material_id.
+    """
+    try:
+        # Get audit logs for material changes
+        logs = await audit_service.get_audit_logs(
+            session,
+            action_type="material_change",
+            resource_type="material",
+            resource_id=None,  # Get all materials
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=0,
+        )
+        
+        # Format material change events
+        material_changes = []
+        for log in logs:
+            material_id = log.resource_id or (log.metadata_json.get("material_id") if log.metadata_json else None)
+            timestamp = log.created_at.isoformat() if log.created_at else None
+            
+            if material_id and timestamp:
+                material_changes.append({
+                    "material_id": material_id,
+                    "timestamp": timestamp,
+                    "previous_material": log.metadata_json.get("previous_material") if log.metadata_json else None,
+                })
+        
+        return {
+            "material_changes": material_changes,
+            "count": len(material_changes),
+        }
+    except Exception as e:
+        logger.error(f"Error fetching material changes: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch material changes: {str(e)}")
 
 
 @router.get("/machines/stats")
