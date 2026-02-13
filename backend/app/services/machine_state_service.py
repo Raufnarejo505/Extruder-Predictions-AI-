@@ -34,7 +34,7 @@ class StateThresholds:
     """Configurable thresholds for state detection"""
     # Core thresholds
     RPM_ON: float = 5.0          # rpm - movement present
-    RPM_PROD: float = 10.0       # rpm - production possible
+    RPM_PROD: float = 10.0       # rpm - production possible (inclusive: >= 10.0)
     P_ON: float = 2.0            # bar - pressure present
     P_PROD: float = 5.0          # bar - typical production pressure
     T_MIN_ACTIVE: float = 60.0   # °C - below this = cold/off
@@ -354,6 +354,36 @@ class MachineStateDetector:
         logger.debug("State determination: machine_id={}, rpm={}, pressure={}, temp_avg={}, d_temp={}", 
                     self.machine_id, rpm_val, pressure_val, temp_avg_val, d_temp)
         
+        # PRODUCTION: primary criteria - CHECK FIRST before other states
+        # This ensures high RPM + high pressure = PRODUCTION, regardless of other conditions
+        if (rpm_val >= self.thresholds.RPM_PROD and 
+            pressure is not None and pressure >= self.thresholds.P_PROD):
+            logger.info("PRODUCTION state detected (primary): machine_id={}, rpm={}, pressure={}, temp_avg={}", 
+                       self.machine_id, rpm_val, pressure, temp_avg)
+            return MachineState.PRODUCTION, 0.9
+        
+        # PRODUCTION: fallback criteria - also check before OFF/IDLE
+        if rpm_val >= self.thresholds.RPM_PROD:
+            fallback_conditions = []
+            
+            # Check pressure
+            if pressure is not None and pressure >= self.thresholds.P_ON:
+                fallback_conditions.append("pressure")
+            
+            # Check motor load
+            if reading.motor_load is not None and reading.motor_load >= self.thresholds.MOTOR_LOAD_MIN:
+                fallback_conditions.append("motor_load")
+            
+            # Check throughput
+            if reading.throughput_kg_h is not None and reading.throughput_kg_h >= self.thresholds.THROUGHPUT_MIN:
+                fallback_conditions.append("throughput")
+            
+            if fallback_conditions:
+                confidence = 0.7 if len(fallback_conditions) > 1 else 0.6
+                logger.info("PRODUCTION state detected (fallback): machine_id={}, rpm={}, conditions={}", 
+                           self.machine_id, rpm_val, fallback_conditions)
+                return MachineState.PRODUCTION, confidence
+        
         # OFF: cold, no RPM, low/no pressure
         # IMPORTANT: Only return OFF if machine is COLD. If warm, check for IDLE instead.
         if rpm_val < self.thresholds.RPM_ON:
@@ -390,32 +420,6 @@ class MachineStateDetector:
             d_temp is not None and d_temp >= self.thresholds.HEATING_RATE):
             return MachineState.HEATING, 0.8
         
-        # PRODUCTION: primary criteria
-        if (rpm_val >= self.thresholds.RPM_PROD and 
-            pressure is not None and pressure >= self.thresholds.P_PROD):
-            logger.info("PRODUCTION state detected (primary): machine_id={}, rpm={}, pressure={}", 
-                       self.machine_id, rpm_val, pressure)
-            return MachineState.PRODUCTION, 0.9
-        
-        # PRODUCTION: fallback criteria
-        if rpm_val >= self.thresholds.RPM_PROD:
-            fallback_conditions = []
-            
-            # Check pressure
-            if pressure is not None and pressure >= self.thresholds.P_ON:
-                fallback_conditions.append("pressure")
-            
-            # Check motor load
-            if reading.motor_load is not None and reading.motor_load >= self.thresholds.MOTOR_LOAD_MIN:
-                fallback_conditions.append("motor_load")
-            
-            # Check throughput
-            if reading.throughput_kg_h is not None and reading.throughput_kg_h >= self.thresholds.THROUGHPUT_MIN:
-                fallback_conditions.append("throughput")
-            
-            if fallback_conditions:
-                confidence = 0.7 if len(fallback_conditions) > 1 else 0.6
-                return MachineState.PRODUCTION, confidence
         
         # IDLE: warm, stable, no production
         # PRIORITIZE IDLE when machine is warm (temp_avg >= T_MIN_ACTIVE) and not running
