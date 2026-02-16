@@ -301,6 +301,8 @@ async def get_extruder_latest_rows(
 async def get_extruder_status(
     current_user: User = Depends(require_viewer),
 ):
+    from app.services.mssql_extruder_poller import mssql_extruder_poller
+    
     host = (os.getenv("MSSQL_HOST") or "").strip()
     port_raw = (os.getenv("MSSQL_PORT") or "1433").strip()
     user = (os.getenv("MSSQL_USER") or "").strip()
@@ -308,6 +310,7 @@ async def get_extruder_status(
     database = (os.getenv("MSSQL_DATABASE") or "HISTORISCH").strip()
     table_raw = (os.getenv("MSSQL_TABLE") or "Tab_Actual").strip()
     schema_raw = (os.getenv("MSSQL_SCHEMA") or "dbo").strip()
+    mssql_enabled = os.getenv("MSSQL_ENABLED", "true").lower() in {"1", "true", "yes"}
 
     schema = schema_raw
     table = table_raw
@@ -322,6 +325,11 @@ async def get_extruder_status(
     except Exception:
         port = None
 
+    # Check poller status
+    poller_running = mssql_extruder_poller._task is not None and not mssql_extruder_poller._task.done()
+    poller_enabled = mssql_extruder_poller.enabled
+    poller_effective_enabled = mssql_extruder_poller._effective_enabled
+
     return {
         "configured": configured,
         "host": host or None,
@@ -329,6 +337,14 @@ async def get_extruder_status(
         "database": database or None,
         "schema": schema or None,
         "table": table or None,
+        "mssql_enabled": mssql_enabled,
+        "poller_enabled": poller_enabled,
+        "poller_running": poller_running,
+        "poller_effective_enabled": poller_effective_enabled,
+        "poller_machine_id": str(mssql_extruder_poller._machine_id) if mssql_extruder_poller._machine_id else None,
+        "poller_sensor_id": str(mssql_extruder_poller._sensor_id) if mssql_extruder_poller._sensor_id else None,
+        "poller_window_size": len(mssql_extruder_poller._window),
+        "poller_poll_interval": mssql_extruder_poller.poll_interval_seconds,
         "last_attempt_at": _extruder_last_attempt_at.isoformat() if _extruder_last_attempt_at else None,
         "last_success_at": _extruder_last_success_at.isoformat() if _extruder_last_success_at else None,
         "last_error_at": _extruder_last_error_at.isoformat() if _extruder_last_error_at else None,
