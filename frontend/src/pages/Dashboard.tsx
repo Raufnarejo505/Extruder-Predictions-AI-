@@ -109,20 +109,8 @@ export default function Dashboard() {
         if (machinesStatsResult.data) setMachinesStats(machinesStatsResult.data);
         if (sensorsStatsResult.data) setSensorsStats(sensorsStatsResult.data);
         if (predictionsStatsResult.data) setPredictionsStats(predictionsStatsResult.data);
-        if (currentDashboardResult.data) {
-          setCurrentDashboardData(currentDashboardResult.data);
-          // Update machine state from current dashboard data
-          if (currentDashboardResult.data.machine_state) {
-            setMachineState(currentDashboardResult.data.machine_state);
-          }
-        }
-        
-        // Update material changes for chart markers
-        if (materialChangesResult.data && materialChangesResult.data.material_changes) {
-          setMaterialChanges(materialChangesResult.data.material_changes || []);
-        }
-        
-        // Update machine states
+        // Update machine states first (for reference, but dashboard/current takes priority)
+        let machineStateFromStatesAPI: string | null = null;
         if (machineStatesResult.data) {
           setMachineStates(machineStatesResult.data);
           
@@ -146,7 +134,7 @@ export default function Dashboard() {
           if (selectedMachineId && states[selectedMachineId]) {
             const stateInfo = states[selectedMachineId] as any;
             if (stateInfo && stateInfo.state) {
-              selectedMachineState = stateInfo.state;
+              selectedMachineState = String(stateInfo.state).trim().toUpperCase();
               console.log(`✅ Found state for machine ${selectedMachineId}: ${selectedMachineState}`);
             }
           } else {
@@ -155,14 +143,14 @@ export default function Dashboard() {
             if (machineIds.length === 1) {
               const firstState = states[machineIds[0]] as any;
               if (firstState && firstState.state) {
-                selectedMachineState = firstState.state;
+                selectedMachineState = String(firstState.state).trim().toUpperCase();
                 console.log(`Using first (and only) machine state: ${selectedMachineState}`);
               }
             } else if (machineIds.length > 0) {
               // Multiple machines - use the first one as fallback
               const firstState = states[machineIds[0]] as any;
               if (firstState && firstState.state) {
-                selectedMachineState = firstState.state;
+                selectedMachineState = String(firstState.state).trim().toUpperCase();
                 console.log(`Using first available machine state: ${selectedMachineState} (from ${machineIds.length} machines)`);
               }
             } else {
@@ -170,7 +158,31 @@ export default function Dashboard() {
             }
           }
           
-          setMachineState(selectedMachineState);
+          machineStateFromStatesAPI = selectedMachineState;
+        }
+        
+        // Update machine state from current dashboard data (THIS IS THE SOURCE OF TRUTH for baseline learning)
+        // Dashboard/current API state takes priority because it's what the baseline learning message is based on
+        if (currentDashboardResult.data) {
+          setCurrentDashboardData(currentDashboardResult.data);
+          if (currentDashboardResult.data.machine_state) {
+            const state = String(currentDashboardResult.data.machine_state).trim().toUpperCase();
+            setMachineState(state);
+            console.log('Machine state from dashboard/current (PRIORITY):', state);
+          } else if (machineStateFromStatesAPI) {
+            // Fallback to machine-state API if dashboard doesn't provide state
+            setMachineState(machineStateFromStatesAPI);
+            console.log('Machine state from machine-state API (fallback):', machineStateFromStatesAPI);
+          }
+        } else if (machineStateFromStatesAPI) {
+          // Fallback if dashboard data is not available
+          setMachineState(machineStateFromStatesAPI);
+          console.log('Machine state from machine-state API (fallback, no dashboard data):', machineStateFromStatesAPI);
+        }
+        
+        // Update material changes for chart markers
+        if (materialChangesResult.data && materialChangesResult.data.material_changes) {
+          setMaterialChanges(materialChangesResult.data.material_changes || []);
         }
         
       } catch (error) {
@@ -343,8 +355,16 @@ export default function Dashboard() {
                         }}
                       ></div>
                     </div>
-                    <div className="text-xs text-blue-600 mt-1">
-                      Collecting samples during PRODUCTION state...
+                    <div className="text-xs mt-1">
+                      {machineState === 'PRODUCTION' ? (
+                        <span className="text-blue-600">
+                          ✅ Collecting samples during PRODUCTION state...
+                        </span>
+                      ) : (
+                        <span className="text-amber-600">
+                          ⏸️ Waiting for PRODUCTION state to collect samples... (Current: {machineState || 'UNKNOWN'})
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
