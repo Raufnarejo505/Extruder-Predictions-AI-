@@ -331,49 +331,6 @@ export default function Dashboard() {
                 {machineState === 'IDLE' && <div className="flex items-center gap-2"><span className="text-slate-600">⏸️</span> Bereit - Warten auf Produktionsstart</div>}
                 {machineState === 'OFF' && <div className="flex items-center gap-2"><span className="text-red-600">🔴</span> Maschine aus - Keine Heizung aktiv</div>}
               </div>
-              {/* Learning Mode Indicator with Progress - Only show when in PRODUCTION */}
-              {currentDashboardData?.baseline_status === 'learning' && machineState === 'PRODUCTION' && (
-                <div className="mt-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="text-sm text-blue-800 flex items-center gap-2 mb-2">
-                    <span>📚</span> Baseline Learning Mode Active - Alarms Disabled
-                  </div>
-                  {/* Progress Bar */}
-                  <div className="mt-2">
-                    <div className="flex items-center justify-between text-xs text-blue-700 mb-1">
-                      <span>
-                        {currentDashboardData?.baseline_samples_collected ?? 0} / {currentDashboardData?.baseline_samples_required ?? 100} Samples
-                      </span>
-                      <span className="font-medium">
-                        {Math.round(currentDashboardData?.baseline_progress_percent ?? 0)}%
-                      </span>
-                    </div>
-                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                        style={{ 
-                          width: `${Math.min(100, Math.max(0, currentDashboardData?.baseline_progress_percent ?? 0))}%` 
-                        }}
-                      ></div>
-                    </div>
-                    <div className="text-xs mt-1">
-                      <span className="text-blue-600">
-                        ✅ Collecting samples during PRODUCTION state...
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {/* Show message when learning mode is active but machine is not in PRODUCTION */}
-              {currentDashboardData?.baseline_status === 'learning' && machineState !== 'PRODUCTION' && (
-                <div className="mt-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
-                  <div className="text-sm text-amber-800 flex items-center gap-2">
-                    <span>⏸️</span> Baseline Learning Mode Paused - Waiting for PRODUCTION state (Current: {machineState || 'UNKNOWN'})
-                  </div>
-                  <div className="text-xs text-amber-700 mt-1">
-                    Samples will be collected automatically when machine enters PRODUCTION state.
-                  </div>
-                </div>
-              )}
               {/* Baseline Status */}
               {currentDashboardData?.baseline_status && currentDashboardData.baseline_status !== 'learning' && (
                 <div className="mt-3 text-sm">
