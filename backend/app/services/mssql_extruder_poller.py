@@ -82,13 +82,17 @@ class MSSQLExtruderPoller:
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         if not self.enabled:
-            logger.info("MSSQL extruder poller master-disabled (MSSQL_ENABLED=false). Poller will not start.")
+            logger.warning("⚠️ MSSQL extruder poller master-disabled (MSSQL_ENABLED=false). Poller will not start.")
             return
         if self._task and not self._task.done():
+            logger.info("MSSQL extruder poller already running")
             return
         self._stop.clear()
         self._task = loop.create_task(self._run())
-        logger.info("MSSQL extruder poller started")
+        logger.info(
+            f"✅ MSSQL extruder poller started: host={self.host}, database={self.database}, "
+            f"table={self.table}, poll_interval={self.poll_interval_seconds}s"
+        )
 
     async def stop(self) -> None:
         if not self._task:
@@ -505,9 +509,9 @@ class MSSQLExtruderPoller:
                             
                             # Get material_id from machine metadata (default to "Material 1" if not set)
                             material_id = (machine.metadata_json or {}).get("current_material", "Material 1")
-                            logger.debug(
-                                f"Baseline learning check: machine_id={machine.id}, material_id={material_id}, "
-                                f"machine_state=PRODUCTION"
+                            logger.info(
+                                f"🔍 Baseline learning check: machine_id={machine.id}, material_id={material_id}, "
+                                f"machine_state=PRODUCTION, machine_metadata={machine.metadata_json}"
                             )
                             
                             # Get active profile
@@ -516,8 +520,8 @@ class MSSQLExtruderPoller:
                             )
                             
                             if profile and profile.baseline_learning:
-                                logger.debug(
-                                    f"Profile {profile.id} found with baseline_learning=True, "
+                                logger.info(
+                                    f"✅ Profile {profile.id} found with baseline_learning=True, "
                                     f"collecting samples for material_id={material_id}"
                                 )
                                 # Collect samples for baseline learning (only in PRODUCTION)
@@ -565,8 +569,8 @@ class MSSQLExtruderPoller:
                                             f"valid_samples={len(valid_samples)}, readings={readings}"
                                         )
                             elif profile:
-                                logger.debug(
-                                    f"Profile {profile.id} found but baseline_learning={profile.baseline_learning}, "
+                                logger.info(
+                                    f"⏸️ Profile {profile.id} found but baseline_learning={profile.baseline_learning}, "
                                     f"skipping sample collection (material_id={material_id})"
                                 )
                             else:
@@ -626,19 +630,23 @@ class MSSQLExtruderPoller:
         return result
 
     async def _run(self) -> None:
+        logger.info("🚀 MSSQL extruder poller _run() started")
         await self._ensure_machine_and_sensor()
+        logger.info(f"✅ Machine and sensor ensured: machine_id={self._machine_id}, sensor_id={self._sensor_id}")
 
         while not self._stop.is_set():
             try:
                 await self._load_runtime_config()
 
                 if not self._effective_enabled:
+                    logger.debug("MSSQL extruder poller disabled via DB setting, waiting...")
                     await asyncio.sleep(2)
                     continue
 
                 if not self.host or not self.username or not self.password:
                     logger.error(
-                        "MSSQL extruder poller enabled but missing connection settings (host/user/password)."
+                        f"❌ MSSQL extruder poller enabled but missing connection settings: "
+                        f"host={bool(self.host)}, username={bool(self.username)}, password={bool(self.password)}"
                     )
                     await asyncio.sleep(5)
                     continue
@@ -650,6 +658,7 @@ class MSSQLExtruderPoller:
 
                 new_rows = await asyncio.to_thread(self._fetch_rows_sync)
                 if new_rows:
+                    logger.info(f"📥 MSSQL poller fetched {len(new_rows)} new rows")
                     for r in new_rows:
                         self._window.append(r)
                     self._window.sort(key=lambda x: x.trend_date)
@@ -659,6 +668,10 @@ class MSSQLExtruderPoller:
 
                     readings, meta = self._compute_features()
                     ts = self._window[-1].trend_date
+
+                    logger.info(
+                        f"🔄 Processing MSSQL data: ts={ts.isoformat()}, readings={readings}, window_size={meta.get('window_size')}"
+                    )
 
                     ai_result = await self._score_with_ai_service(ts=ts, readings=readings)
                     await self._persist_prediction(ts=ts, ai_result=ai_result, readings=readings, meta=meta)
@@ -671,6 +684,8 @@ class MSSQLExtruderPoller:
                         meta.get("drift_score"),
                         meta.get("window_size"),
                     )
+                else:
+                    logger.debug(f"MSSQL poller: No new rows fetched (window_size={len(self._window)})")
 
                 self._consecutive_failures = 0
                 self._next_retry_at = None
