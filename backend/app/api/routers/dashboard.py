@@ -26,6 +26,51 @@ from uuid import UUID, uuid4
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
+def _diagnose_baseline_learning_issues(
+    poller_running: bool,
+    mssql_enabled: bool,
+    poller_effective_enabled: bool,
+    configured: bool,
+    machine,
+    profile,
+    baseline_samples_count: int,
+    poller_window_size: int,
+) -> List[str]:
+    """Diagnose why baseline learning samples are not being collected"""
+    issues = []
+    
+    if not mssql_enabled:
+        issues.append("❌ MSSQL_ENABLED environment variable is false - poller will not start")
+    
+    if not poller_running:
+        issues.append("❌ MSSQL poller task is not running - check startup logs")
+    
+    if not poller_effective_enabled:
+        issues.append("❌ MSSQL poller disabled in database (connections.mssql.enabled=false) - enable in Settings → Connections")
+    
+    if not configured:
+        issues.append("❌ MSSQL connection not configured - missing host, username, or password")
+    
+    if machine is None:
+        issues.append("❌ Machine not found - poller cannot collect samples")
+    
+    if profile is None:
+        issues.append("❌ Profile not found - create a profile for the current material")
+    elif not profile.baseline_learning:
+        issues.append("❌ Profile baseline_learning is False - start baseline learning mode")
+    
+    if poller_window_size == 0:
+        issues.append("⚠️ Poller window is empty - no data fetched from MSSQL yet")
+    
+    if baseline_samples_count == 0 and poller_running and profile and profile.baseline_learning:
+        issues.append("⚠️ No samples collected yet - check if poller is processing data and machine is in PRODUCTION state")
+    
+    if not issues:
+        issues.append("✅ All checks passed - samples should be collecting")
+    
+    return issues
+
+
 def apply_decision_hierarchy(
     *,
     rule_based_severity: int,
@@ -300,8 +345,12 @@ async def get_extruder_latest_rows(
 @router.get("/extruder/status")
 async def get_extruder_status(
     current_user: User = Depends(require_viewer),
+    session: AsyncSession = Depends(get_session),
 ):
     from app.services.mssql_extruder_poller import mssql_extruder_poller
+    from app.services.baseline_learning_service import baseline_learning_service
+    from app.models.profile import ProfileBaselineSample, ProfileBaselineStats
+    from sqlalchemy import select as sql_select, func
     
     host = (os.getenv("MSSQL_HOST") or "").strip()
     port_raw = (os.getenv("MSSQL_PORT") or "1433").strip()
@@ -329,6 +378,36 @@ async def get_extruder_status(
     poller_running = mssql_extruder_poller._task is not None and not mssql_extruder_poller._task.done()
     poller_enabled = mssql_extruder_poller.enabled
     poller_effective_enabled = mssql_extruder_poller._effective_enabled
+    
+    # Get machine to check material_id
+    machine = None
+    material_id = None
+    profile = None
+    baseline_samples_count = 0
+    baseline_stats_count = 0
+    
+    if mssql_extruder_poller._machine_id:
+        machine = await session.get(Machine, mssql_extruder_poller._machine_id)
+        if machine:
+            material_id = (machine.metadata_json or {}).get("current_material", "Material 1")
+            profile = await baseline_learning_service.get_active_profile(
+                session, machine.id, material_id
+            )
+            
+            if profile:
+                # Count samples
+                sample_count_result = await session.execute(
+                    sql_select(func.count(ProfileBaselineSample.id))
+                    .where(ProfileBaselineSample.profile_id == profile.id)
+                )
+                baseline_samples_count = sample_count_result.scalar() or 0
+                
+                # Count stats entries
+                stats_count_result = await session.execute(
+                    sql_select(func.count(ProfileBaselineStats.id))
+                    .where(ProfileBaselineStats.profile_id == profile.id)
+                )
+                baseline_stats_count = stats_count_result.scalar() or 0
 
     return {
         "configured": configured,
@@ -345,6 +424,34 @@ async def get_extruder_status(
         "poller_sensor_id": str(mssql_extruder_poller._sensor_id) if mssql_extruder_poller._sensor_id else None,
         "poller_window_size": len(mssql_extruder_poller._window),
         "poller_poll_interval": mssql_extruder_poller.poll_interval_seconds,
+        "poller_last_trend_date": mssql_extruder_poller._last_trend_date.isoformat() if mssql_extruder_poller._last_trend_date else None,
+        "machine_name": machine.name if machine else None,
+        "machine_material_id": material_id,
+        "profile_id": str(profile.id) if profile else None,
+        "profile_baseline_learning": profile.baseline_learning if profile else None,
+        "profile_baseline_ready": profile.baseline_ready if profile else None,
+        "baseline_samples_count": baseline_samples_count,
+        "baseline_stats_count": baseline_stats_count,
+        "diagnostics": {
+            "poller_started": poller_running,
+            "poller_enabled_env": mssql_enabled,
+            "poller_enabled_db": poller_effective_enabled,
+            "connection_configured": configured,
+            "machine_found": machine is not None,
+            "profile_found": profile is not None,
+            "profile_learning": profile.baseline_learning if profile else False,
+            "has_samples": baseline_samples_count > 0,
+            "issues": _diagnose_baseline_learning_issues(
+                poller_running=poller_running,
+                mssql_enabled=mssql_enabled,
+                poller_effective_enabled=poller_effective_enabled,
+                configured=configured,
+                machine=machine,
+                profile=profile,
+                baseline_samples_count=baseline_samples_count,
+                poller_window_size=len(mssql_extruder_poller._window),
+            )
+        },
         "last_attempt_at": _extruder_last_attempt_at.isoformat() if _extruder_last_attempt_at else None,
         "last_success_at": _extruder_last_success_at.isoformat() if _extruder_last_success_at else None,
         "last_error_at": _extruder_last_error_at.isoformat() if _extruder_last_error_at else None,

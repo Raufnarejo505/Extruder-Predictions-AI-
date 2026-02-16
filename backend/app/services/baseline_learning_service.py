@@ -132,13 +132,13 @@ class BaselineLearningService:
             
             # Only collect in learning mode
             if not profile.baseline_learning:
-                logger.debug(f"Profile {profile_id} not in learning mode, skipping sample")
+                logger.warning(f"⏸️ Profile {profile_id} not in learning mode, skipping sample")
                 return False
             
             # Only collect when in PRODUCTION state
             if machine_state != MachineStateEnum.PRODUCTION.value:
-                logger.debug(
-                    f"Machine not in PRODUCTION state (current: {machine_state}), "
+                logger.warning(
+                    f"⏸️ Machine not in PRODUCTION state (current: {machine_state}), "
                     f"skipping sample for profile {profile_id}"
                 )
                 return False
@@ -188,9 +188,9 @@ class BaselineLearningService:
             stats.last_updated = timestamp
             
             await session.commit()
-            logger.debug(
-                f"Collected sample for profile {profile_id}, metric {metric_name}: "
-                f"value={value}, total_samples={stats.sample_count}"
+            logger.info(
+                f"✅ Collected baseline sample: profile={profile_id}, metric={metric_name}, "
+                f"value={value:.2f}, total_samples={int(stats.sample_count)}"
             )
             return True
             
