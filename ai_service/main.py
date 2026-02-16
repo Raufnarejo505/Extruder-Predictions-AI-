@@ -47,6 +47,11 @@ class PredictPayload(APIModel):
     sensor_id: str
     timestamp: datetime
     readings: Dict[str, float] = Field(default_factory=dict)
+    # Baseline context (optional - for material-aware predictions)
+    profile_id: Optional[str] = None
+    material_id: Optional[str] = None
+    baseline_stats: Optional[Dict[str, Dict[str, float]]] = None
+    # Format: {"ScrewSpeed_rpm": {"mean": 10.5, "std": 0.2, "p05": 10.0, "p95": 11.0}, ...}
 
 class PredictResponse(APIModel):
     prediction: str
@@ -341,6 +346,46 @@ class PredictionEngine:
             print(f"Model prediction failed: {e}")
             return None
 
+    def _calculate_baseline_anomaly_score(
+        self, 
+        readings: Dict[str, float], 
+        baseline_stats: Dict[str, Dict[str, float]]
+    ) -> tuple[float, Dict[str, float]]:
+        """
+        Calculate anomaly score based on baseline statistics (z-scores).
+        
+        Returns:
+            Tuple of (max_anomaly_score, z_scores_dict)
+        """
+        z_scores = {}
+        max_z_score = 0.0
+        
+        for metric_name, value in readings.items():
+            if metric_name not in baseline_stats:
+                continue
+                
+            stats = baseline_stats[metric_name]
+            mean = stats.get("mean")
+            std = stats.get("std")
+            
+            if mean is None or std is None or std <= 0:
+                continue
+            
+            # Calculate z-score (standard deviations from mean)
+            z_score = abs((value - mean) / std)
+            z_scores[metric_name] = z_score
+            
+            # Track maximum z-score
+            if z_score > max_z_score:
+                max_z_score = z_score
+        
+        # Convert z-score to anomaly score (0.0-1.0)
+        # z-score of 3.0 (3 std devs) = anomaly score of 1.0
+        # z-score of 1.5 (1.5 std devs) = anomaly score of 0.5
+        anomaly_score = min(1.0, max_z_score / 3.0) if max_z_score > 0 else 0.0
+        
+        return anomaly_score, z_scores
+    
     def _calculate_confidence(self, model_score: Optional[float], rule_score: float, window_size: int) -> float:
         """Calculate prediction confidence based on multiple factors"""
         confidence = 0.8  # Base confidence
@@ -388,7 +433,18 @@ class PredictionEngine:
                 window = list(buffer)
                 model_score = self._model_score(window)
                 rule_score = self._rule_score(payload.readings)
-                raw_score = max(model_score or 0.0, rule_score)
+                
+                # Baseline-aware scoring: Use baseline stats if available
+                baseline_score = 0.0
+                baseline_z_scores = {}
+                if payload.baseline_stats and payload.readings:
+                    baseline_score, baseline_z_scores = self._calculate_baseline_anomaly_score(
+                        payload.readings, payload.baseline_stats
+                    )
+                
+                # Blend scores: baseline provides material-specific context
+                # Isolation Forest detects patterns, baseline detects statistical deviations
+                raw_score = max(model_score or 0.0, rule_score, baseline_score)
 
                 # Smooth the score (EMA) and apply hysteresis + dwell-time.
                 now_ts = time.time()
@@ -445,6 +501,10 @@ class PredictionEngine:
                     contributing_features={
                         "rule_score": round(rule_score, 4),
                         "model_score": round(model_score, 4) if model_score else 0.0,
+                        "baseline_score": round(baseline_score, 4) if baseline_score > 0 else None,
+                        "baseline_z_scores": {k: round(v, 3) for k, v in baseline_z_scores.items()} if baseline_z_scores else None,
+                        "profile_id": payload.profile_id,
+                        "material_id": payload.material_id,
                         "window_size": len(window),
                         "buffer_utilization": round(len(window) / WINDOW_SIZE, 2),
                         "raw_score": round(raw_score, 4),

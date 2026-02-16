@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field
@@ -13,6 +13,11 @@ class PredictionRequest(BaseModel):
     timestamp: datetime
     value: float
     context: Optional[dict] = None
+    # Baseline context (optional - for material-aware predictions)
+    profile_id: Optional[UUID] = None
+    material_id: Optional[str] = None
+    baseline_stats: Optional[Dict[str, Dict[str, float]]] = None
+    # Format: {"ScrewSpeed_rpm": {"mean": 10.5, "std": 0.2, "p05": 10.0, "p95": 11.0}, ...}
 
 
 class PredictionCreate(BaseModel):

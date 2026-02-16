@@ -31,6 +31,15 @@ async def call_ai_service(payload: PredictionRequest) -> Dict[str, Any]:
         if payload.context and "readings" in payload.context
         else {"value": payload.value},
     }
+    
+    # Add baseline context if available (for material-aware predictions)
+    if payload.profile_id:
+        ai_request["profile_id"] = str(payload.profile_id)
+    if payload.material_id:
+        ai_request["material_id"] = payload.material_id
+    if payload.baseline_stats:
+        ai_request["baseline_stats"] = payload.baseline_stats
+    
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(f"{settings.ai_service_url}/predict", json=ai_request)
         response.raise_for_status()

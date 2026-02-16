@@ -619,12 +619,63 @@ class MSSQLExtruderPoller:
         if self._machine_id is None or self._sensor_id is None:
             return {}
 
+        # Load baseline stats if available (for material-aware predictions)
+        profile_id = None
+        material_id = None
+        baseline_stats = None
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                machine = await session.get(Machine, self._machine_id)
+                if machine:
+                    material_id = (machine.metadata_json or {}).get("current_material", "Material 1")
+                    
+                    from app.services.baseline_learning_service import baseline_learning_service
+                    from app.models.profile import ProfileBaselineStats
+                    from sqlalchemy import select
+                    
+                    # Get active profile
+                    profile = await baseline_learning_service.get_active_profile(
+                        session, machine.id, material_id
+                    )
+                    
+                    if profile and profile.baseline_ready:
+                        profile_id = profile.id
+                        
+                        # Load baseline stats for all metrics
+                        stats_result = await session.execute(
+                            select(ProfileBaselineStats)
+                            .where(ProfileBaselineStats.profile_id == profile.id)
+                        )
+                        
+                        baseline_stats = {}
+                        for stat in stats_result.scalars().all():
+                            baseline_stats[stat.metric_name] = {
+                                "mean": float(stat.baseline_mean) if stat.baseline_mean is not None else None,
+                                "std": float(stat.baseline_std) if stat.baseline_std is not None else None,
+                                "p05": float(stat.p05) if stat.p05 is not None else None,
+                                "p95": float(stat.p95) if stat.p95 is not None else None,
+                            }
+                        
+                        # Remove None values
+                        baseline_stats = {k: {k2: v2 for k2, v2 in v.items() if v2 is not None} 
+                                        for k, v in baseline_stats.items() if any(v2 is not None for v2 in v.values())}
+                        
+                        if not baseline_stats:
+                            baseline_stats = None
+        except Exception as e:
+            # Non-blocking: baseline loading should not break predictions
+            logger.debug(f"Failed to load baseline stats for AI prediction: {e}")
+
         payload = PredictionRequest(
             sensor_id=self._sensor_id,
             machine_id=self._machine_id,
             timestamp=ts,
             value=float(readings.get("pressure", 0.0)),
             context={"readings": readings},
+            profile_id=profile_id,
+            material_id=material_id,
+            baseline_stats=baseline_stats,
         )
         result = await prediction_service.call_ai_service(payload)
         return result
