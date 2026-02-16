@@ -505,6 +505,10 @@ class MSSQLExtruderPoller:
                             
                             # Get material_id from machine metadata (default to "Material 1" if not set)
                             material_id = (machine.metadata_json or {}).get("current_material", "Material 1")
+                            logger.debug(
+                                f"Baseline learning check: machine_id={machine.id}, material_id={material_id}, "
+                                f"machine_state=PRODUCTION"
+                            )
                             
                             # Get active profile
                             profile = await baseline_learning_service.get_active_profile(
@@ -512,6 +516,10 @@ class MSSQLExtruderPoller:
                             )
                             
                             if profile and profile.baseline_learning:
+                                logger.debug(
+                                    f"Profile {profile.id} found with baseline_learning=True, "
+                                    f"collecting samples for material_id={material_id}"
+                                )
                                 # Collect samples for baseline learning (only in PRODUCTION)
                                 samples = {
                                     "ScrewSpeed_rpm": readings.get("rpm"),
@@ -550,15 +558,22 @@ class MSSQLExtruderPoller:
                                             f"✅ Collected {collected_count} baseline samples for profile {profile.id} "
                                             f"(machine_id={machine.id}, material_id={material_id})"
                                         )
+                                    else:
+                                        logger.warning(
+                                            f"⚠️ No samples collected for profile {profile.id} "
+                                            f"(machine_id={machine.id}, material_id={material_id}) - "
+                                            f"valid_samples={len(valid_samples)}, readings={readings}"
+                                        )
                             elif profile:
                                 logger.debug(
                                     f"Profile {profile.id} found but baseline_learning={profile.baseline_learning}, "
-                                    f"skipping sample collection"
+                                    f"skipping sample collection (material_id={material_id})"
                                 )
                             else:
-                                logger.debug(
-                                    f"No active profile found for machine_id={machine.id}, material_id={material_id}, "
-                                    f"skipping baseline sample collection"
+                                logger.warning(
+                                    f"⚠️ No active profile found for machine_id={machine.id}, material_id={material_id}, "
+                                    f"skipping baseline sample collection. "
+                                    f"Machine metadata: {machine.metadata_json}"
                                 )
                         except Exception as e:
                             # Non-blocking: baseline learning should not break main flow

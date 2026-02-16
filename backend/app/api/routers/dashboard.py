@@ -21,7 +21,7 @@ from app.models.sensor_data import SensorData
 from app.utils.baseline_formatter import build_standardized_baseline, build_standardized_baseline_from_dict
 from app.services import audit_service
 from app.schemas.audit_log import AuditLogCreate
-from uuid import UUID
+from uuid import UUID, uuid4
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -2139,12 +2139,39 @@ async def log_material_change(
     current_user: User = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
-    Log material change event with timestamp.
+    Log material change event with timestamp and update machine metadata.
     This endpoint is called when user changes material selection in UI.
     """
     from datetime import datetime
+    from sqlalchemy import select as sql_select
     
     try:
+        # Update machine metadata with new current_material
+        # If machine_id is provided, use it; otherwise find the extruder machine
+        machine = None
+        if machine_id:
+            machine = await session.get(Machine, UUID(machine_id))
+        else:
+            # Find the extruder machine (default behavior)
+            machines = await session.scalars(
+                sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1)
+            )
+            machine = machines.first()
+        
+        if machine:
+            # Update machine metadata with current_material
+            metadata = machine.metadata_json or {}
+            old_material = metadata.get("current_material")
+            metadata["current_material"] = material_id
+            machine.metadata_json = metadata
+            session.add(machine)
+            await session.commit()
+            logger.info(
+                f"Updated machine {machine.id} metadata: current_material = {old_material} → {material_id}"
+            )
+        else:
+            logger.warning(f"Machine not found for material change (machine_id={machine_id})")
+        
         # Create audit log entry for material change
         audit_data = AuditLogCreate(
             user_id=str(current_user.id) if current_user else None,
@@ -2155,7 +2182,7 @@ async def log_material_change(
             metadata={
                 "material_id": material_id,
                 "previous_material": previous_material,
-                "machine_id": machine_id,
+                "machine_id": str(machine.id) if machine else machine_id,
                 "timestamp": datetime.utcnow().isoformat(),
             },
         )
@@ -2167,11 +2194,13 @@ async def log_material_change(
         return {
             "success": True,
             "material_id": material_id,
+            "machine_id": str(machine.id) if machine else machine_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "message": f"Material change to {material_id} logged successfully",
+            "message": f"Material change to {material_id} logged and machine metadata updated successfully",
         }
     except Exception as e:
-        logger.error(f"Error logging material change: {e}")
+        logger.error(f"Error logging material change: {e}", exc_info=True)
+        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to log material change: {str(e)}")
 
 
