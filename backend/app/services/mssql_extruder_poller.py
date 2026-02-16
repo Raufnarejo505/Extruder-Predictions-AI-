@@ -639,15 +639,25 @@ class MSSQLExtruderPoller:
                 await self._load_runtime_config()
 
                 if not self._effective_enabled:
-                    logger.debug("MSSQL extruder poller disabled via DB setting, waiting...")
+                    # Log once per minute to avoid spam, but make it visible
+                    if not hasattr(self, '_last_disabled_log') or (datetime.utcnow() - self._last_disabled_log).total_seconds() > 60:
+                        logger.warning(
+                            "⏸️ MSSQL extruder poller DISABLED via DB setting (connections.mssql.enabled=false). "
+                            "Enable it in Settings → Connections to start data collection."
+                        )
+                        self._last_disabled_log = datetime.utcnow()
                     await asyncio.sleep(2)
                     continue
 
                 if not self.host or not self.username or not self.password:
-                    logger.error(
-                        f"❌ MSSQL extruder poller enabled but missing connection settings: "
-                        f"host={bool(self.host)}, username={bool(self.username)}, password={bool(self.password)}"
-                    )
+                    # Log once per minute to avoid spam
+                    if not hasattr(self, '_last_missing_config_log') or (datetime.utcnow() - self._last_missing_config_log).total_seconds() > 60:
+                        logger.error(
+                            f"❌ MSSQL extruder poller enabled but missing connection settings: "
+                            f"host={bool(self.host)}, username={bool(self.username)}, password={bool(self.password)}. "
+                            f"Configure MSSQL connection in Settings → Connections or set environment variables."
+                        )
+                        self._last_missing_config_log = datetime.utcnow()
                     await asyncio.sleep(5)
                     continue
 
