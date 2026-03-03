@@ -123,6 +123,10 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       .filter((marker): marker is { x: string; material_id: string; timestamp: string } => marker !== null);
   }, [materialChanges, chartData]);
 
+  // Whether baseline visuals should be shown (show in all states if baseline is ready)
+  // Must be defined before statusText useMemo that uses it
+  const showBaseline = baselineReady && !!baselineMean && !!greenBand;
+
   // Status text (show baseline info even when not in production, but with neutral evaluation)
   const statusText = useMemo(() => {
     // If not in production but baseline is available, show baseline info with neutral status
@@ -151,9 +155,6 @@ export const SensorChart: React.FC<SensorChartProps> = ({
     }
     return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
   }, [deviation, baselineMean, unit, baselineReady]);
-
-  // Whether baseline visuals should be shown (show in all states if baseline is ready)
-  const showBaseline = baselineReady && !!baselineMean && !!greenBand;
 
   // Chart domain calculation
   const allValues = [
