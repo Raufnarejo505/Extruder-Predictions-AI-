@@ -1,15 +1,20 @@
 import asyncio
 import json
 import smtplib
+from datetime import datetime
 from email.message import EmailMessage
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.models.alarm import Alarm
 from app.models.sensor import Sensor
+from app.models.email_recipient import EmailRecipient
+from app.db.session import AsyncSessionLocal
 
 settings = get_settings()
 
@@ -52,49 +57,70 @@ async def verify_email_transport() -> None:
         logger.warning("SMTP transport verification failed: {}", exc)
 
 
-async def _send_email(subject: str, body: str, to_override: Optional[str] = None) -> None:
-    """Send email with improved error handling"""
+async def get_active_email_recipients(session: Optional[AsyncSession] = None) -> List[str]:
+    """Get list of active email recipient addresses"""
+    if session is None:
+        async with AsyncSessionLocal() as session:
+            return await get_active_email_recipients(session)
+    
+    result = await session.execute(
+        select(EmailRecipient.email).where(EmailRecipient.is_active == True)
+    )
+    recipients = result.scalars().all()
+    return list(recipients) if recipients else []
+
+
+async def _send_email(subject: str, body: str, to_override: Optional[str] = None, use_recipients: bool = True) -> None:
+    """Send email with improved error handling
+    
+    Args:
+        subject: Email subject
+        body: Email body
+        to_override: Single email address to send to (overrides recipients list)
+        use_recipients: If True, send to all active recipients from database. If False, use default notification_email
+    """
     if not email_configured():
         logger.warning("Email not configured, skipping email send")
         raise ValueError("Email SMTP credentials not configured")
     
-    message = EmailMessage()
-    message["From"] = settings.email_smtp_user
-    message["To"] = to_override or settings.notification_email
-    message["Subject"] = subject
-    message.set_content(body)
+    # Determine recipients
+    recipients: List[str] = []
+    if to_override:
+        recipients = [to_override]
+    elif use_recipients:
+        # Get active recipients from database
+        async with AsyncSessionLocal() as session:
+            recipients = await get_active_email_recipients(session)
+        # Fallback to default if no recipients found
+        if not recipients:
+            recipients = [settings.notification_email] if settings.notification_email else []
+    else:
+        recipients = [settings.notification_email] if settings.notification_email else []
+    
+    if not recipients:
+        logger.warning("No email recipients configured, skipping email send")
+        return
+    
+    # Get sender email (use email_sender from .env if configured, otherwise fallback to email_smtp_user from .env)
+    sender_email = settings.email_sender if settings.email_sender else settings.email_smtp_user
+    
+    # Send to all recipients
+    for recipient_email in recipients:
+        try:
+            message = EmailMessage()
+            message["From"] = sender_email
+            message["To"] = recipient_email
+            message["Subject"] = subject
+            message.set_content(body)
 
-    try:
-        with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port, timeout=10) as server:
-            server.starttls()
-            server.login(settings.email_smtp_user, settings.email_smtp_pass)
-            server.send_message(message)
-            logger.info("Email notification sent successfully")
-    except smtplib.SMTPAuthenticationError as exc:
-        error_msg = str(exc)
-        # Provide helpful error message for Gmail authentication issues
-        if "BadCredentials" in error_msg or "535" in error_msg:
-            detailed_error = (
-                "Gmail authentication failed. This usually means:\n"
-                "1. The password is incorrect, OR\n"
-                "2. You need to use an App Password instead of your regular password\n"
-                "3. 2-Step Verification must be enabled on your Google account\n\n"
-                "To fix: Go to https://myaccount.google.com/apppasswords and generate an App Password, "
-                "then use that password in your SMTP configuration."
-            )
-            logger.error(f"SMTP Authentication Error: {detailed_error}")
-            raise ValueError(detailed_error) from exc
-        else:
-            logger.error(f"SMTP Authentication Error: {error_msg}")
-            raise ValueError(f"SMTP authentication failed: {error_msg}") from exc
-    except smtplib.SMTPException as exc:
-        error_msg = f"SMTP error: {str(exc)}"
-        logger.error(error_msg)
-        raise ValueError(error_msg) from exc
-    except Exception as exc:
-        error_msg = f"Email send failed: {str(exc)}"
-        logger.warning(error_msg)
-        raise ValueError(error_msg) from exc
+            with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port, timeout=10) as server:
+                server.starttls()
+                server.login(settings.email_smtp_user, settings.email_smtp_pass)
+                server.send_message(message)
+                logger.info(f"Email notification sent successfully to {recipient_email}")
+        except Exception as exc:
+            logger.warning(f"Failed to send email to {recipient_email}: {exc}")
+            # Continue to next recipient even if one fails
 
 
 async def _send_slack(body: dict) -> None:
@@ -123,17 +149,27 @@ async def send_password_reset_email(email: str, reset_link: str) -> None:
 
 async def send_test_email(to_override: Optional[str] = None) -> tuple[bool, Optional[str]]:
     """
-    Send a simple test email either to the provided address or to
-    settings.notification_email.
+    Send a simple test email either to the provided address or to all active recipients.
     Returns (success: bool, error_message: str | None)
     """
     if not email_configured():
         return False, "Email SMTP credentials are not configured. Please configure SMTP settings in backend/.env"
     
+    # Get sender email for display in message (from .env configuration)
+    sender_email = settings.email_sender if settings.email_sender else settings.email_smtp_user
+    
     subject = "Predictive Maintenance – Test Email"
-    body = "This is a test email from the Predictive Maintenance Platform."
+    body = f"""This is a test email from the Predictive Maintenance Platform.
+
+Sent from: {sender_email}
+Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+If you received this email, your email notification system is working correctly."""
+    
     try:
-        await _send_email(subject, body, to_override=to_override)
+        # If to_override is provided, send only to that address
+        # Otherwise, send to all active recipients
+        await _send_email(subject, body, to_override=to_override, use_recipients=True)
         return True, None
     except ValueError as exc:
         # ValueError contains user-friendly error message
@@ -183,7 +219,7 @@ async def send_welcome_email(email: str, full_name: str) -> None:
 
 
 async def send_prediction_alert_email(machine_id: str, sensor_id: str, prediction_status: str, score: float, confidence: float) -> None:
-    """Send email notification for critical/warning predictions to tanirajsingh574@gmail.com"""
+    """Send email notification for critical/warning predictions to all active recipients"""
     if not email_configured():
         logger.warning("Email not configured, skipping prediction alert")
         return
@@ -208,9 +244,9 @@ async def send_prediction_alert_email(machine_id: str, sensor_id: str, predictio
     This is an automated notification from the Predictive Maintenance Platform.
     """
     try:
-        # Send to specific email address
-        await _send_email(subject, body, to_override="tanirajsingh574@gmail.com")
-        logger.info(f"Prediction alert email sent to tanirajsingh574@gmail.com for machine {machine_id}")
+        # Send to all active recipients from database (uses .env configuration)
+        await _send_email(subject, body, to_override=None, use_recipients=True)
+        logger.info(f"Prediction alert email sent to active recipients for machine {machine_id}")
     except Exception as exc:
         logger.warning(f"Failed to send prediction alert email: {exc}")
 

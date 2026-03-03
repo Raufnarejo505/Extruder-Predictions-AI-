@@ -27,13 +27,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_exp_minutes: int = 60
 
-    # Notifications
-    email_smtp_host: str = "smtp.gmail.com" # Assuming Gmail/GSuite for now or standard
+    # Notifications - All values must come from .env file
+    email_smtp_host: str = ""  # Must be set in .env file
     email_smtp_port: int = 587
-    email_smtp_user: str = "tanirajsingh@itx-solution.com"
-    email_smtp_pass: str = "tanirajsingh1122"
+    email_smtp_user: str = ""  # Must be set in .env file
+    email_smtp_pass: str = ""  # Must be set in .env file
+    email_sender: str = ""  # Must be set in .env file
     slack_webhook_url: Optional[str] = None
-    notification_email: str = "tanirajsingh574@gmail.com"
+    notification_email: str = ""  # Fallback recipient if no recipients in DB (optional, can be set in .env)
 
     # Reporting
     reports_dir: Path = Path("./reports")

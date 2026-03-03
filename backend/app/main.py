@@ -19,6 +19,7 @@ from app.api.routers import (
     audit,
     connections,
     dashboard,
+    email_recipients,
     health,
     history,
     jobs,
@@ -146,6 +147,7 @@ app.include_router(alarms.router)
 app.include_router(tickets.router)
 app.include_router(reports.router)  # Must be before static mount to handle /reports/download routes
 app.include_router(notifications.router)
+app.include_router(email_recipients.router)
 app.include_router(knowledge.router)
 app.include_router(history.router)
 app.include_router(dashboard.router)

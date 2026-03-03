@@ -30,4 +30,5 @@ from app.models.profile import (
     ProfileScoringBand,
     ProfileMessageTemplate,
 )
+from app.models.email_recipient import EmailRecipient
 

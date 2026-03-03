@@ -80,16 +80,23 @@ class MachineStateService:
             
             # Log state transition if changed
             if previous_state.state != current_state.state:
+                # Convert machine_id to string if it's a UUID
+                machine_id_str = str(machine_id)
+                
+                # Convert MachineState enum to MachineStateEnum for database operations
+                from_state_enum = MachineStateEnum(previous_state.state.value) if previous_state.state else None
+                to_state_enum = MachineStateEnum(current_state.state.value)
+                
                 await self._log_state_transition(
-                    machine_id, previous_state.state, current_state.state,
+                    machine_id_str, from_state_enum, to_state_enum,
                     previous_state, current_state, reading
                 )
-            
-            # Store state in database
-            await self._store_machine_state(machine_id, current_state, reading)
-            
-            # Handle state-based actions
-            await self._handle_state_actions(machine_id, previous_state.state, current_state.state)
+                
+                # Store state in database
+                await self._store_machine_state(machine_id_str, current_state, reading)
+                
+                # Handle state-based actions (including email notifications)
+                await self._handle_state_actions(machine_id_str, from_state_enum, to_state_enum)
             
             return current_state
             
@@ -402,8 +409,26 @@ class MachineStateService:
         from_state: MachineStateEnum, 
         to_state: MachineStateEnum
     ):
-        """Handle actions based on state changes"""
+        """Handle actions based on state changes - automatically sends email notifications"""
         try:
+            # Get machine name for email
+            machine_name = machine_id
+            try:
+                result = await self.db.execute(
+                    select(Machine).where(Machine.id == machine_id)
+                )
+                machine = result.scalar_one_or_none()
+                if machine:
+                    machine_name = machine.name or machine_id
+            except Exception:
+                pass  # Use machine_id if we can't get name
+            
+            # Automatically send email notification for state change (non-blocking)
+            # This happens automatically whenever machine state changes - no manual trigger needed
+            await self._send_state_change_email(
+                machine_id, machine_name, from_state, to_state
+            )
+            
             # Create alerts for important transitions
             # Note: SENSOR_FAULT state removed - sensor faults now default to OFF
             if to_state == MachineStateEnum.PRODUCTION:
@@ -454,6 +479,75 @@ class MachineStateService:
         except Exception as e:
             logger.error(f"Error creating alert for {machine_id}: {e}")
             await self.db.rollback()
+    
+    async def _send_state_change_email(
+        self,
+        machine_id: str,
+        machine_name: str,
+        from_state: MachineStateEnum,
+        to_state: MachineStateEnum
+    ):
+        """Send email notification when machine state changes (fire-and-forget, non-blocking)"""
+        try:
+            from app.services import notification_service
+            from datetime import datetime
+            import asyncio
+            
+            # Only send email if notification service is configured
+            if not notification_service.email_configured():
+                logger.debug("Email not configured, skipping state change notification")
+                return
+            
+            # Format state names for email
+            from_state_name = from_state.value if from_state else "Unknown"
+            to_state_name = to_state.value
+            
+            # Create email subject
+            subject = f"[PM Alert] Machine State Change - {machine_name}"
+            
+            # Create email body
+            body = f"""Machine State Change Notification
+
+Machine: {machine_name} (ID: {machine_id})
+Previous State: {from_state_name}
+New State: {to_state_name}
+Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+State Transition Details:
+- Machine has transitioned from {from_state_name} to {to_state_name}
+- This is an automated notification from the Predictive Maintenance Platform
+
+Dashboard: http://localhost:3000
+
+Please review the machine status in the dashboard if needed.
+"""
+            
+            # Send email asynchronously (fire-and-forget) so it doesn't block state detection
+            # This ensures state detection continues even if email sending is slow or fails
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+            
+            # Create background task for email sending
+            async def send_email_task():
+                try:
+                    await notification_service._send_email(
+                        subject=subject,
+                        body=body,
+                        to_override=None,  # Send to all active recipients
+                        use_recipients=True
+                    )
+                    logger.info(f"✅ State change email sent automatically for {machine_id}: {from_state_name} → {to_state_name}")
+                except Exception as email_exc:
+                    logger.warning(f"⚠️ Failed to send state change email for {machine_id}: {email_exc}")
+            
+            # Schedule email sending as background task (non-blocking)
+            loop.create_task(send_email_task())
+            logger.debug(f"State change email task scheduled for {machine_id}: {from_state_name} → {to_state_name}")
+                
+        except Exception as e:
+            logger.error(f"Error scheduling state change email for {machine_id}: {e}")
     
     async def cleanup_detector(self, machine_id: str):
         """Clean up detector for machine"""
