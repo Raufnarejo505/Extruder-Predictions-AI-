@@ -1717,16 +1717,16 @@ async def get_current_dashboard_data(
         state_message = state_display_names.get(machine_state_str, f"Machine is in {machine_state_str} state")
         explanation_text = f"{state_message}. Process evaluation is disabled. Evaluation only runs during PRODUCTION."
         
-        # Calculate spread_status for Temp_Spread even in non-PRODUCTION states
+        # IMPORTANT UI contract:
+        # Do NOT show orange/red/green evaluation outside PRODUCTION.
+        # We still return current values, but keep evaluation status neutral.
         spread_status = "unknown"
-        temp_spread_value = metrics_response.get("Temp_Spread", {}).get("current_value")
-        if temp_spread_value is not None:
-            if temp_spread_value <= 5.0:
-                spread_status = "green"
-            elif temp_spread_value <= 8.0:
-                spread_status = "orange"
-            else:
-                spread_status = "red"
+
+        # Attach a plain-language explanation per metric so the UI can always explain
+        # why evaluation is disabled.
+        for k, v in metrics_response.items():
+            if isinstance(v, dict) and "explanation" not in v:
+                v["explanation"] = explanation_text
         
         return {
             "machine_state": machine_state_str,
@@ -2168,6 +2168,37 @@ async def get_current_dashboard_data(
                 confidence=0.8 if base.get("count", 0) >= 30 else 0.6,  # Lower confidence for rolling baseline
             )
         
+        # Plain-language explanation for UI contract
+        explanation = None
+        if standardized_baseline and isinstance(standardized_baseline, dict):
+            mat = standardized_baseline.get("baseline_material")
+            bmin = standardized_baseline.get("baseline_min")
+            bmax = standardized_baseline.get("baseline_max")
+        else:
+            mat = material_id
+            bmin = green_band.get("min") if isinstance(green_band, dict) else None
+            bmax = green_band.get("max") if isinstance(green_band, dict) else None
+
+        if current_value is None:
+            explanation = f"{key}: no current value available"
+        elif baseline_mean is None or green_band is None:
+            explanation = f"{key}: baseline not available for material {mat}" if mat else f"{key}: baseline not available"
+        else:
+            # If stability upgraded severity, say so explicitly (early warning).
+            if rule_based_severity == 0 and final_severity >= 1 and stability_state_for_sensor in {"orange", "red"}:
+                explanation = (
+                    f"{key}: value is within baseline band but process variability increased "
+                    f"(stability {stability_state_for_sensor}) for material {mat}"
+                )
+            elif final_severity == 0:
+                explanation = f"{key}: within baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: within baseline band"
+            elif final_severity == 1:
+                explanation = f"{key}: slightly outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: slight deviation from baseline"
+            elif final_severity == 2:
+                explanation = f"{key}: outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: critical deviation from baseline"
+            else:
+                explanation = f"{key}: evaluation status unknown"
+
         # Get stability state for this sensor (convert severity to state string)
         stability_state_for_sensor = None
         if key in stability_severity_dict:
@@ -2192,6 +2223,7 @@ async def get_current_dashboard_data(
             "ml_warning": ml_warning if is_in_production else False,  # ML warning flag for this metric
             "baseline": standardized_baseline,  # Add standardized baseline structure
             "stability": stability_state_for_sensor,  # Stability state: "green" | "orange" | "red" | null
+            "explanation": explanation,  # Plain-language explanation for UI
         }
     
     # Calculate overall risk and severity (reuse logic)

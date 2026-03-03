@@ -29,6 +29,10 @@ interface SensorChartProps {
   deviation: number | null | undefined;
   /** Baseline material ID */
   baselineMaterial: string | null | undefined;
+  /** Baseline confidence (0.0 - 1.0) */
+  baselineConfidence?: number | null | undefined;
+  /** Plain-language explanation for the current status */
+  explanation?: string | null | undefined;
   /** Stability state: "green" | "orange" | "red" | "unknown" */
   stability?: string | null | undefined;
   /** Material change events for vertical markers */
@@ -52,6 +56,8 @@ export const SensorChart: React.FC<SensorChartProps> = ({
   severity,
   deviation,
   baselineMaterial,
+  baselineConfidence,
+  explanation,
   stability,
   materialChanges = [],
   unit,
@@ -125,9 +131,10 @@ export const SensorChart: React.FC<SensorChartProps> = ({
     return '⚪ UNKNOWN - No evaluation';
   }, [severity]);
 
-  // Deviation text
+  // Deviation text (only meaningful when baseline is available)
   const deviationText = useMemo(() => {
     if (deviation === null || deviation === undefined) return null;
+    if (!baselineReady || !isInProduction || !baselineMean) return null;
     const absDev = Math.abs(deviation);
     const pctDev = baselineMean && baselineMean !== 0 
       ? ((absDev / baselineMean) * 100).toFixed(1) 
@@ -137,65 +144,25 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
     }
     return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
-  }, [deviation, baselineMean, unit]);
+  }, [deviation, baselineMean, unit, baselineReady, isInProduction]);
 
-  // Don't show chart if not in PRODUCTION or baseline not ready
-  if (!isInProduction || !baselineReady) {
-    return (
-      <div className="bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-slate-200 rounded-2xl p-8 flex items-center justify-center shadow-inner" style={{ height }}>
-        <div className="text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-200 flex items-center justify-center">
-            <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </div>
-          <p className="text-slate-700 font-semibold mb-2 text-base">
-            Baseline comparison available only during active production.
-          </p>
-          <p className="text-sm text-slate-500 font-medium">
-            {!isInProduction && `Machine state: ${isInProduction ? 'PRODUCTION' : 'Not in PRODUCTION'}`}
-            {!baselineReady && 'Baseline not ready'}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // Don't show chart if no baseline data
-  if (!baselineMean || !greenBand) {
-    return (
-      <div className="bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-slate-200 rounded-2xl p-8 flex items-center justify-center shadow-inner" style={{ height }}>
-        <div className="text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-100 flex items-center justify-center">
-            <svg className="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <p className="text-slate-700 font-semibold mb-2 text-base">
-            Baseline data not available
-          </p>
-          <p className="text-sm text-slate-500 font-medium">
-            Waiting for baseline calculation...
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Whether baseline visuals should be shown
+  const showBaseline = isInProduction && baselineReady && !!baselineMean && !!greenBand;
 
   // Chart domain calculation
   const allValues = [
     ...chartData.map(d => d.value),
-    baselineMean,
-    greenBand.min,
-    greenBand.max,
     currentValue,
+    ...(showBaseline ? [baselineMean as number, greenBand!.min, greenBand!.max] : []),
   ].filter((v): v is number => v !== null && v !== undefined && !isNaN(v));
 
   // Ensure we have valid values for domain calculation
   let yDomain: [number, number];
   if (allValues.length === 0) {
     // Fallback: use baseline values if no other data
-    const fallbackValues = [baselineMean, greenBand.min, greenBand.max].filter((v): v is number => v !== null && v !== undefined && !isNaN(v));
+    const fallbackValues = showBaseline
+      ? [baselineMean as number, greenBand!.min, greenBand!.max].filter((v): v is number => v !== null && v !== undefined && !isNaN(v))
+      : chartData.map(d => d.value).filter((v): v is number => v !== null && v !== undefined && !isNaN(v));
     if (fallbackValues.length > 0) {
       const minVal = Math.min(...fallbackValues);
       const maxVal = Math.max(...fallbackValues);
@@ -236,11 +203,32 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         </div>
         {baselineMaterial && (
           <p className="text-xs text-slate-600">
-            Baseline (Material: <span className="font-medium">{baselineMaterial}</span>)
+            Baseline (Material: <span className="font-medium">{baselineMaterial}</span>
+            {typeof baselineConfidence === 'number' && !Number.isNaN(baselineConfidence) && (
+              <>
+                {', '}
+                Confidence:{' '}
+                <span className="font-medium">
+                  {(baselineConfidence * 100).toFixed(0)}%
+                </span>
+              </>
+            )}
+            )
           </p>
         )}
         {!baselineMaterial && (
-          <p className="text-xs text-slate-600">Baseline</p>
+          <p className="text-xs text-slate-600">
+            Baseline
+            {typeof baselineConfidence === 'number' && !Number.isNaN(baselineConfidence) && (
+              <>
+                {': '}
+                Confidence{' '}
+                <span className="font-medium">
+                  {(baselineConfidence * 100).toFixed(0)}%
+                </span>
+              </>
+            )}
+          </p>
         )}
       </div>
 
@@ -249,15 +237,15 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-700">Status:</span>
           <span className={`font-bold px-2 py-1 rounded-md ${
-            severity === 2 ? 'bg-rose-100 text-rose-700 border border-rose-300' : 
-            severity === 1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
-            severity === 0 ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 
+            showBaseline && severity === 2 ? 'bg-rose-100 text-rose-700 border border-rose-300' : 
+            showBaseline && severity === 1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
+            showBaseline && severity === 0 ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 
             'bg-slate-100 text-slate-500 border border-slate-300'
           }`}>
-            {statusText}
+            {showBaseline ? statusText : '⚪ UNKNOWN - No evaluation (baseline inactive)'}
           </span>
         </div>
-        {deviationText && (
+        {deviationText && showBaseline && (
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-700">Deviation:</span>
             <span className={`font-bold px-2 py-1 rounded-md ${
@@ -278,6 +266,12 @@ export const SensorChart: React.FC<SensorChartProps> = ({
             }}>
               {currentValue.toFixed(2)} {unit}
             </span>
+          </div>
+        )}
+        {explanation && (
+          <div className="w-full text-xs text-slate-600">
+            <span className="font-semibold text-slate-700">Explanation:</span>{" "}
+            <span>{explanation}</span>
           </div>
         )}
       </div>
@@ -317,22 +311,31 @@ export const SensorChart: React.FC<SensorChartProps> = ({
             />
 
             {/* Green Baseline Band (shaded area between min and max) */}
-            <ReferenceArea
-              y1={greenBand.min}
-              y2={greenBand.max}
-              fill="#10b981"
-              fillOpacity={0.15}
-              stroke="none"
-            />
+            {showBaseline && greenBand && (
+              <ReferenceArea
+                y1={greenBand.min}
+                y2={greenBand.max}
+                fill="#10b981"
+                fillOpacity={0.15}
+                stroke="none"
+              />
+            )}
 
             {/* Dashed Baseline Mean Line */}
-            <ReferenceLine
-              y={baselineMean}
-              stroke="#10b981"
-              strokeWidth={2}
-              strokeDasharray="5 5"
-              label={{ value: `Baseline Mean (${baselineMean.toFixed(2)} ${unit})`, position: 'right', fill: '#10b981', fontSize: 11 }}
-            />
+            {showBaseline && (
+              <ReferenceLine
+                y={baselineMean}
+                stroke="#9ca3af" // gray-400
+                strokeWidth={2}
+                strokeDasharray="5 5"
+                label={{
+                  value: `Baseline`,
+                  position: 'right',
+                  fill: '#6b7280', // gray-500
+                  fontSize: 11,
+                }}
+              />
+            )}
 
             {/* Vertical Markers for Material Changes */}
             {materialChangeMarkers.map((marker, index) => (
@@ -368,18 +371,20 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       </div>
 
       {/* Chart Footer Info */}
-      <div className="mt-5 pt-4 border-t border-slate-200 text-xs text-slate-600 space-y-2">
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded bg-emerald-500/20 border border-emerald-500/50"></span>
-          <span className="font-semibold">Green Band:</span> 
-          <span className="font-bold text-emerald-700">{greenBand.min.toFixed(2)} - {greenBand.max.toFixed(2)} {unit}</span>
+      {showBaseline && greenBand && (
+        <div className="mt-5 pt-4 border-t border-slate-200 text-xs text-slate-600 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded bg-emerald-500/15 border border-emerald-500/40"></span>
+            <span className="font-semibold">Baseline Range:</span> 
+            <span className="font-bold text-slate-800">{greenBand.min.toFixed(2)} - {greenBand.max.toFixed(2)} {unit}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded border-2 border-dashed border-slate-400"></span>
+            <span className="font-semibold">Baseline Mean:</span> 
+            <span className="font-bold text-slate-800">{baselineMean.toFixed(2)} {unit}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded border-2 border-dashed border-emerald-500"></span>
-          <span className="font-semibold">Baseline Mean:</span> 
-          <span className="font-bold text-emerald-700">{baselineMean.toFixed(2)} {unit}</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

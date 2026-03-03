@@ -5,6 +5,15 @@ import { BackendOnlineBanner } from '../components/BackendOnlineBanner';
 import { DashboardSkeleton } from '../components/LoadingSkeleton';
 import { useT } from '../i18n/I18nProvider';
 import { SensorChart } from '../components/SensorChart';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 
 const gradientClass = "min-h-screen bg-gradient-to-br from-slate-50 via-purple-50/30 to-slate-50 text-slate-900";
 const REFRESH_INTERVAL = 3000; // 3 seconds refresh interval
@@ -466,12 +475,21 @@ export default function Dashboard() {
               {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline_mean !== undefined && (
                 <div className="text-xs text-slate-600 mb-1">
                   Baseline Mean: {currentDashboardData.metrics.ScrewSpeed_rpm.baseline_mean.toFixed(1)} rpm
+                  {currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_material ? (
+                    <span className="text-slate-500"> (Material: {currentDashboardData.metrics.ScrewSpeed_rpm.baseline.baseline_material})</span>
+                  ) : null}
                 </div>
               )}
               {/* Green Band */}
               {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.ScrewSpeed_rpm?.green_band && (
                 <div className="text-xs text-slate-600 mb-1">
                   Green Band: {currentDashboardData.metrics.ScrewSpeed_rpm.green_band.min.toFixed(1)} - {currentDashboardData.metrics.ScrewSpeed_rpm.green_band.max.toFixed(1)} rpm
+                </div>
+              )}
+              {/* Explanation */}
+              {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.ScrewSpeed_rpm?.explanation && (
+                <div className="text-xs text-slate-600 mt-2">
+                  {String(currentDashboardData.metrics.ScrewSpeed_rpm.explanation)}
                 </div>
               )}
               {/* Deviation */}
@@ -531,12 +549,21 @@ export default function Dashboard() {
               {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.Pressure_bar?.baseline_mean !== undefined && (
                 <div className="text-xs text-slate-600 mb-1">
                   Baseline Mean: {currentDashboardData.metrics.Pressure_bar.baseline_mean.toFixed(1)} bar
+                  {currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_material ? (
+                    <span className="text-slate-500"> (Material: {currentDashboardData.metrics.Pressure_bar.baseline.baseline_material})</span>
+                  ) : null}
                 </div>
               )}
               {/* Green Band */}
               {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.Pressure_bar?.green_band && (
                 <div className="text-xs text-slate-600 mb-1">
                   Green Band: {currentDashboardData.metrics.Pressure_bar.green_band.min.toFixed(1)} - {currentDashboardData.metrics.Pressure_bar.green_band.max.toFixed(1)} bar
+                </div>
+              )}
+              {/* Explanation */}
+              {machineState === 'PRODUCTION' && currentDashboardData?.metrics?.Pressure_bar?.explanation && (
+                <div className="text-xs text-slate-600 mt-2">
+                  {String(currentDashboardData.metrics.Pressure_bar.explanation)}
                 </div>
               )}
               {/* Deviation */}
@@ -636,9 +663,9 @@ export default function Dashboard() {
               <div className="text-sm text-slate-600 mb-3">Temperaturspreizung (Temp_Spread)</div>
               <div className="text-5xl mb-3">
                 <span className={
-                  currentDashboardData?.spread_status === 'red' ? 'text-rose-600' :
-                  currentDashboardData?.spread_status === 'orange' ? 'text-amber-600' :
-                  currentDashboardData?.spread_status === 'green' ? 'text-emerald-600' :
+                  (machineState === 'PRODUCTION' && currentDashboardData?.spread_status === 'red') ? 'text-rose-600' :
+                  (machineState === 'PRODUCTION' && currentDashboardData?.spread_status === 'orange') ? 'text-amber-600' :
+                  (machineState === 'PRODUCTION' && currentDashboardData?.spread_status === 'green') ? 'text-emerald-600' :
                   machineState === 'PRODUCTION' ? 
                   ((mssqlDerived?.derived?.Temp_Spread?.current || 0) > 8 ? 'text-rose-600' :
                    (mssqlDerived?.derived?.Temp_Spread?.current || 0) > 5 ? 'text-amber-600' :
@@ -678,7 +705,7 @@ export default function Dashboard() {
         </div>
 
         {/* Sensor Charts Section - UI Contract Implementation */}
-        {machineState === 'PRODUCTION' && currentDashboardData?.baseline_status === 'ready' && (() => {
+        {(() => {
           // Prepare historical data for ScrewSpeed_rpm
           const screwSpeedHistorical = (mssqlRows || []).map((row: any, index: number) => ({
             timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
@@ -706,6 +733,30 @@ export default function Dashboard() {
             };
           }).filter((d: any) => d.value > 0);
 
+          // Prepare historical data for Temp_Spread (no baseline band, fixed thresholds)
+          const tempSpreadHistorical = (mssqlRows || []).map((row: any, index: number) => {
+            const temps = [
+              parseFloat(row.Temp_Zone1_C),
+              parseFloat(row.Temp_Zone2_C),
+              parseFloat(row.Temp_Zone3_C),
+              parseFloat(row.Temp_Zone4_C),
+            ].filter((t): t is number => !isNaN(t) && t > 0);
+            const spread = temps.length >= 2 ? Math.max(...temps) - Math.min(...temps) : 0;
+            return {
+              timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+              value: spread,
+            };
+          }).filter((d: any) => d.value > 0);
+
+          // Determine Temp_Spread color based on fixed thresholds (only meaningful in PRODUCTION)
+          const latestSpread = tempSpreadHistorical.length > 0 ? tempSpreadHistorical[tempSpreadHistorical.length - 1].value : null;
+          let tempSpreadColor = '#94a3b8'; // neutral gray by default
+          if (machineState === 'PRODUCTION' && latestSpread !== null) {
+            tempSpreadColor = '#10b981'; // green
+            if (latestSpread > 8) tempSpreadColor = '#ef4444'; // red
+            else if (latestSpread > 5) tempSpreadColor = '#f59e0b'; // orange
+          }
+
           return (
             <div className="mb-8">
               <h2 className="text-xl text-slate-900 mb-4">
@@ -723,6 +774,8 @@ export default function Dashboard() {
                   severity={currentDashboardData?.metrics?.ScrewSpeed_rpm?.severity}
                   deviation={currentDashboardData?.metrics?.ScrewSpeed_rpm?.deviation}
                   baselineMaterial={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_material || null}
+                  baselineConfidence={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_confidence}
+                  explanation={currentDashboardData?.metrics?.ScrewSpeed_rpm?.explanation || null}
                   stability={currentDashboardData?.metrics?.ScrewSpeed_rpm?.stability || null}
                   materialChanges={materialChanges}
                   unit="rpm"
@@ -742,6 +795,8 @@ export default function Dashboard() {
                   severity={currentDashboardData?.metrics?.Pressure_bar?.severity}
                   deviation={currentDashboardData?.metrics?.Pressure_bar?.deviation}
                   baselineMaterial={currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_material || null}
+                  baselineConfidence={currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_confidence}
+                  explanation={currentDashboardData?.metrics?.Pressure_bar?.explanation || null}
                   stability={currentDashboardData?.metrics?.Pressure_bar?.stability || null}
                   materialChanges={materialChanges}
                   unit="bar"
@@ -767,6 +822,8 @@ export default function Dashboard() {
                                                            mssqlDerived?.risk?.sensors[zoneKey] === 'green' ? 0 : null);
                   const deviation = metricData?.deviation || null;
                   const baselineMaterial = metricData?.baseline?.baseline_material || null;
+                  const baselineConfidence = metricData?.baseline?.baseline_confidence || null;
+                  const explanation = metricData?.explanation || null;
                   const stability = metricData?.stability || null;
 
                   return (
@@ -780,6 +837,8 @@ export default function Dashboard() {
                       severity={severity}
                       deviation={deviation}
                       baselineMaterial={baselineMaterial}
+                      baselineConfidence={baselineConfidence}
+                      explanation={explanation}
                       stability={stability}
                       materialChanges={materialChanges}
                       unit="°C"
@@ -801,6 +860,8 @@ export default function Dashboard() {
                   severity={currentDashboardData?.metrics?.Temp_Avg?.severity}
                   deviation={currentDashboardData?.metrics?.Temp_Avg?.deviation}
                   baselineMaterial={currentDashboardData?.metrics?.Temp_Avg?.baseline?.baseline_material || null}
+                  baselineConfidence={currentDashboardData?.metrics?.Temp_Avg?.baseline?.baseline_confidence}
+                  explanation={currentDashboardData?.metrics?.Temp_Avg?.explanation || null}
                   stability={currentDashboardData?.metrics?.Temp_Avg?.stability || null}
                   materialChanges={materialChanges}
                   unit="°C"
@@ -808,6 +869,65 @@ export default function Dashboard() {
                   isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
+
+                {/* Temp_Spread Chart (fixed thresholds, no baseline band) */}
+                <div className="bg-white/95 backdrop-blur-sm border-2 border-slate-200/80 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="mb-5">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="text-xl font-bold text-slate-900">Temperaturspreizung (Temp_Spread)</h3>
+                    </div>
+                    <p className="text-xs text-slate-600">
+                      Bewertung ohne Baseline: ≤5°C 🟢, 5–8°C 🟠, &gt;8°C 🔴
+                    </p>
+                  </div>
+                  <div style={{ height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={tempSpreadHistorical.map(d => ({
+                          ...d,
+                          timeLabel: new Date(d.timestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+                        }))}
+                        margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis
+                          dataKey="timeLabel"
+                          tick={{ fill: '#64748b', fontSize: 11 }}
+                          interval="preserveStartEnd"
+                        />
+                        <YAxis
+                          tick={{ fill: '#64748b', fontSize: 11 }}
+                          label={{
+                            value: '°C',
+                            angle: -90,
+                            position: 'insideLeft',
+                            style: { textAnchor: 'middle', fill: '#64748b' },
+                          }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: '#ffffff',
+                            border: '1px solid #cbd5e1',
+                            borderRadius: '6px',
+                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                          }}
+                          labelStyle={{ color: '#1e293b', fontWeight: '600' }}
+                          formatter={(value: number) => [`${value.toFixed(2)} °C`, 'Temp_Spread']}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="value"
+                          stroke={tempSpreadColor}
+                          strokeWidth={2.5}
+                          dot={{ fill: tempSpreadColor, r: 3 }}
+                          activeDot={{ r: 5 }}
+                          name="Temp_Spread"
+                          isAnimationActive={true}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
               </div>
             </div>
           );
