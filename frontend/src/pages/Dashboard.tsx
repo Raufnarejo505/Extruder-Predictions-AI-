@@ -706,6 +706,9 @@ export default function Dashboard() {
 
         {/* Sensor Charts Section - UI Contract Implementation */}
         {(() => {
+          const isBaselineActive =
+            currentDashboardData?.baseline_status === 'ready' ||
+            currentDashboardData?.baseline_status === 'learning';
           // Prepare historical data for ScrewSpeed_rpm
           const screwSpeedHistorical = (mssqlRows || []).map((row: any, index: number) => ({
             timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
@@ -779,7 +782,7 @@ export default function Dashboard() {
                   stability={currentDashboardData?.metrics?.ScrewSpeed_rpm?.stability || null}
                   materialChanges={materialChanges}
                   unit="rpm"
-                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  baselineReady={isBaselineActive}
                   isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
@@ -800,7 +803,7 @@ export default function Dashboard() {
                   stability={currentDashboardData?.metrics?.Pressure_bar?.stability || null}
                   materialChanges={materialChanges}
                   unit="bar"
-                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  baselineReady={isBaselineActive}
                   isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
@@ -842,7 +845,7 @@ export default function Dashboard() {
                       stability={stability}
                       materialChanges={materialChanges}
                       unit="°C"
-                      baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                      baselineReady={isBaselineActive}
                       isInProduction={machineState === 'PRODUCTION'}
                       height={300}
                     />
@@ -865,7 +868,7 @@ export default function Dashboard() {
                   stability={currentDashboardData?.metrics?.Temp_Avg?.stability || null}
                   materialChanges={materialChanges}
                   unit="°C"
-                  baselineReady={currentDashboardData?.baseline_status === 'ready'}
+                  baselineReady={isBaselineActive}
                   isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
