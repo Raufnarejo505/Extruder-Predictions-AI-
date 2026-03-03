@@ -68,6 +68,53 @@ class TestWebhookRequest(BaseModel):
     event_type: str = "test.event"
 
 
+@router.post("/test-state-change-email")
+async def trigger_test_state_change_email(
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_engineer),
+):
+    """Test state change email notification to all active recipients"""
+    from app.services.machine_state_manager import MachineStateService
+    from app.services.machine_state_service import MachineStateEnum
+    from app.models.machine import Machine
+    from sqlalchemy import select
+    
+    try:
+        # Get the first machine (or you can specify machine_id)
+        result = await session.execute(select(Machine).limit(1))
+        machine = result.scalar_one_or_none()
+        
+        if not machine:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"ok": False, "error": "No machine found in database"},
+            )
+        
+        # Create state service instance
+        state_service = MachineStateService(session)
+        
+        # Trigger a test state change email (OFF -> PRODUCTION)
+        await state_service._send_state_change_email(
+            machine_id=str(machine.id),
+            machine_name=machine.name or str(machine.id),
+            from_state=MachineStateEnum.OFF,
+            to_state=MachineStateEnum.PRODUCTION
+        )
+        
+        return {
+            "ok": True,
+            "message": f"Test state change email triggered for machine {machine.name or machine.id}. Check logs and recipient inboxes.",
+            "machine_id": str(machine.id),
+            "machine_name": machine.name or str(machine.id),
+        }
+    except Exception as e:
+        logger.error(f"Error triggering test state change email: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"ok": False, "error": f"Failed to trigger test email: {str(e)}"},
+        )
+
+
 @router.post("/test-webhook")
 async def trigger_test_webhook(
     payload: TestWebhookRequest,

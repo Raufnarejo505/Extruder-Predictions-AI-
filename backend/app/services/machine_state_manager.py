@@ -529,25 +529,52 @@ Please review the machine status in the dashboard if needed.
             except RuntimeError:
                 loop = asyncio.get_event_loop()
             
-            # Create background task for email sending
+            # Create background task for email sending with proper error handling
             async def send_email_task():
                 try:
-                    await notification_service._send_email(
-                        subject=subject,
-                        body=body,
-                        to_override=None,  # Send to all active recipients
-                        use_recipients=True
-                    )
-                    logger.info(f"✅ State change email sent automatically for {machine_id}: {from_state_name} → {to_state_name}")
+                    # Get active recipients first to log them
+                    from app.services.notification_service import get_active_email_recipients
+                    from app.db.session import AsyncSessionLocal
+                    
+                    async with AsyncSessionLocal() as session:
+                        recipients = await get_active_email_recipients(session)
+                    
+                    if not recipients:
+                        logger.warning(f"No active email recipients found for state change notification for {machine_id}")
+                        # Fallback to default notification email
+                        await notification_service._send_email(
+                            subject=subject,
+                            body=body,
+                            to_override=None,  # Will use fallback from settings
+                            use_recipients=False  # Use fallback email
+                        )
+                        logger.info(f"✅ State change email sent to fallback email for {machine_id}: {from_state_name} → {to_state_name}")
+                    else:
+                        logger.info(f"Sending state change email to {len(recipients)} recipient(s): {', '.join(recipients)}")
+                        await notification_service._send_email(
+                            subject=subject,
+                            body=body,
+                            to_override=None,  # Send to all active recipients
+                            use_recipients=True
+                        )
+                        logger.info(f"✅ State change email sent automatically for {machine_id}: {from_state_name} → {to_state_name}")
                 except Exception as email_exc:
-                    logger.warning(f"⚠️ Failed to send state change email for {machine_id}: {email_exc}")
+                    logger.error(f"⚠️ Failed to send state change email for {machine_id}: {email_exc}", exc_info=True)
             
             # Schedule email sending as background task (non-blocking)
-            loop.create_task(send_email_task())
+            task = loop.create_task(send_email_task())
+            # Add error callback to catch any unhandled exceptions
+            def task_done_callback(task):
+                try:
+                    task.result()  # This will raise if task failed
+                except Exception as e:
+                    logger.error(f"State change email task failed for {machine_id}: {e}", exc_info=True)
+            
+            task.add_done_callback(task_done_callback)
             logger.debug(f"State change email task scheduled for {machine_id}: {from_state_name} → {to_state_name}")
                 
         except Exception as e:
-            logger.error(f"Error scheduling state change email for {machine_id}: {e}")
+            logger.error(f"Error scheduling state change email for {machine_id}: {e}", exc_info=True)
     
     async def cleanup_detector(self, machine_id: str):
         """Clean up detector for machine"""
