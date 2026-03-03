@@ -123,18 +123,24 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       .filter((marker): marker is { x: string; material_id: string; timestamp: string } => marker !== null);
   }, [materialChanges, chartData]);
 
-  // Status text
+  // Status text (show baseline info even when not in production, but with neutral evaluation)
   const statusText = useMemo(() => {
+    // If not in production but baseline is available, show baseline info with neutral status
+    if (!isInProduction && showBaseline) {
+      return '⚪ Baseline available (evaluation only in PRODUCTION)';
+    }
+    // Normal status when in production or when baseline is not available
     if (severity === 2) return '🔴 RED - Critical deviation';
     if (severity === 1) return '🟠 ORANGE - Slight deviation';
     if (severity === 0) return '🟢 GREEN - Within baseline';
+    if (showBaseline) return '⚪ Baseline available (no evaluation)';
     return '⚪ UNKNOWN - No evaluation';
-  }, [severity]);
+  }, [severity, isInProduction, showBaseline]);
 
   // Deviation text (only meaningful when baseline is available)
   const deviationText = useMemo(() => {
     if (deviation === null || deviation === undefined) return null;
-    if (!baselineReady || !isInProduction || !baselineMean) return null;
+    if (!baselineReady || !baselineMean) return null;
     const absDev = Math.abs(deviation);
     const pctDev = baselineMean && baselineMean !== 0 
       ? ((absDev / baselineMean) * 100).toFixed(1) 
@@ -144,10 +150,10 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
     }
     return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
-  }, [deviation, baselineMean, unit, baselineReady, isInProduction]);
+  }, [deviation, baselineMean, unit, baselineReady]);
 
-  // Whether baseline visuals should be shown
-  const showBaseline = isInProduction && baselineReady && !!baselineMean && !!greenBand;
+  // Whether baseline visuals should be shown (show in all states if baseline is ready)
+  const showBaseline = baselineReady && !!baselineMean && !!greenBand;
 
   // Chart domain calculation
   const allValues = [
@@ -237,19 +243,19 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-700">Status:</span>
           <span className={`font-bold px-2 py-1 rounded-md ${
-            showBaseline && severity === 2 ? 'bg-rose-100 text-rose-700 border border-rose-300' : 
-            showBaseline && severity === 1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
-            showBaseline && severity === 0 ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 
+            showBaseline && isInProduction && severity === 2 ? 'bg-rose-100 text-rose-700 border border-rose-300' : 
+            showBaseline && isInProduction && severity === 1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
+            showBaseline && isInProduction && severity === 0 ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 
             'bg-slate-100 text-slate-500 border border-slate-300'
           }`}>
-            {showBaseline ? statusText : '⚪ UNKNOWN - No evaluation (baseline inactive)'}
+            {statusText}
           </span>
         </div>
         {deviationText && showBaseline && (
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-700">Deviation:</span>
             <span className={`font-bold px-2 py-1 rounded-md ${
-              Math.abs(deviation || 0) > (baselineMean * 0.1) ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
+              isInProduction && Math.abs(deviation || 0) > (baselineMean! * 0.1) ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
               'bg-slate-100 text-slate-600 border border-slate-300'
             }`}>
               {deviationText}
