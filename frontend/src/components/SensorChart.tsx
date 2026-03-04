@@ -131,14 +131,14 @@ export const SensorChart: React.FC<SensorChartProps> = ({
   const statusText = useMemo(() => {
     // If not in production but baseline is available, show baseline info with neutral status
     if (!isInProduction && showBaseline) {
-      return '⚪ Baseline available (evaluation only in PRODUCTION)';
+      return '⚪ Baseline verfügbar (Bewertung nur im PRODUKTIONS‑Modus)';
     }
     // Normal status when in production or when baseline is not available
-    if (severity === 2) return '🔴 RED - Critical deviation';
-    if (severity === 1) return '🟠 ORANGE - Slight deviation';
-    if (severity === 0) return '🟢 GREEN - Within baseline';
-    if (showBaseline) return '⚪ Baseline available (no evaluation)';
-    return '⚪ UNKNOWN - No evaluation';
+    if (severity === 2) return '🔴 ROT – Kritische Abweichung';
+    if (severity === 1) return '🟠 ORANGE – Abweichung vom Baseline‑Bereich';
+    if (severity === 0) return '🟢 GRÜN – Im Baseline‑Bereich';
+    if (showBaseline) return '⚪ Baseline verfügbar (keine Bewertung)';
+    return '⚪ UNBEKANNT – Keine Bewertung';
   }, [severity, isInProduction, showBaseline]);
 
   // Deviation text (only meaningful when baseline is available)
@@ -151,9 +151,9 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       : null;
     
     if (pctDev) {
-      return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
+      return `Abweichung: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
     }
-    return `Deviation: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
+    return `Abweichung: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
   }, [deviation, baselineMean, unit, baselineReady]);
 
   // Chart domain calculation
@@ -254,7 +254,7 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         </div>
         {deviationText && showBaseline && (
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-700">Deviation:</span>
+            <span className="font-semibold text-slate-700">Abweichung:</span>
             <span className={`font-bold px-2 py-1 rounded-md ${
               isInProduction && Math.abs(deviation || 0) > (baselineMean! * 0.1) ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
               'bg-slate-100 text-slate-600 border border-slate-300'
@@ -265,7 +265,12 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         )}
         {currentValue !== null && currentValue !== undefined && (
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-700">Current:</span>
+            <span className="inline-flex items-center gap-2">
+              <span className="font-semibold text-slate-700">LIVE</span>
+              <span className="text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500 text-white">
+                Live
+              </span>
+            </span>
             <span className="font-extrabold px-2 py-1 rounded-md border-2" style={{ 
               color: curveColor, 
               backgroundColor: `${curveColor}15`,
@@ -307,8 +312,8 @@ export const SensorChart: React.FC<SensorChartProps> = ({
               }}
               labelStyle={{ color: '#1e293b', fontWeight: '600' }}
               formatter={(value: number, name: string) => {
-                if (name === 'value') return [`${value.toFixed(2)} ${unit}`, 'Live Value'];
-                if (name === 'baseline') return [`${value.toFixed(2)} ${unit}`, 'Baseline Mean'];
+                if (name === 'value') return [`${value.toFixed(2)} ${unit}`, 'Live‑Wert'];
+                if (name === 'baseline') return [`${value.toFixed(2)} ${unit}`, 'Baseline‑Mittelwert'];
                 return [value, name];
               }}
             />
