@@ -22,8 +22,68 @@ from app.utils.baseline_formatter import build_standardized_baseline, build_stan
 from app.services import audit_service
 from app.schemas.audit_log import AuditLogCreate
 from uuid import UUID, uuid4
+from sqlalchemy import select as sql_select
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+async def _ensure_extruder_machine_and_sensor(session: AsyncSession) -> Tuple[UUID, UUID]:
+    """Ensure machine 'Extruder-SQL' and sensor 'Extruder SQL Snapshot' exist; create if missing. Returns (machine_id, sensor_id)."""
+    from app.services import machine_service, sensor_service
+    from app.schemas.machine import MachineCreate
+    from app.schemas.sensor import SensorCreate
+
+    machine = (await session.scalars(
+        sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1)
+    )).first()
+    if machine is None:
+        created = await machine_service.create_machine(
+            session,
+            MachineCreate(
+                name="Extruder-SQL",
+                status="online",
+                criticality="high",
+                metadata={
+                    "source": "mssql",
+                    "machine_type": "extruder",
+                    "type": "extruder",
+                },
+            ),
+        )
+        machine_id = created["id"] if isinstance(created["id"], UUID) else UUID(str(created["id"]))
+    else:
+        machine_id = machine.id
+
+    sensor = (await session.scalars(
+        sql_select(Sensor)
+        .where(
+            and_(
+                Sensor.machine_id == machine_id,
+                Sensor.name == "Extruder SQL Snapshot",
+            )
+        )
+        .limit(1)
+    )).first()
+    if sensor is None:
+        created = await sensor_service.create_sensor(
+            session,
+            SensorCreate(
+                machine_id=machine_id,
+                name="Extruder SQL Snapshot",
+                sensor_type="extruder_sql",
+                unit=None,
+                metadata={
+                    "source": "mssql",
+                    "columns": ["Val_4", "Val_6", "Val_7", "Val_8", "Val_9", "Val_10"],
+                    "trend_column": "TrendDate",
+                },
+            ),
+        )
+        sensor_id = created["id"] if isinstance(created["id"], UUID) else UUID(str(created["id"]))
+    else:
+        sensor_id = sensor.id
+
+    return (machine_id, sensor_id)
 
 
 def _diagnose_baseline_learning_issues(
@@ -206,6 +266,7 @@ async def get_overview(
 async def get_extruder_latest_rows(
     current_user: User = Depends(require_viewer),
     limit: int = Query(200, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
 ):
     global _extruder_last_attempt_at, _extruder_last_success_at, _extruder_last_error_at, _extruder_last_error
     _extruder_last_attempt_at = datetime.utcnow()
@@ -327,6 +388,57 @@ async def get_extruder_latest_rows(
         _extruder_last_success_at = datetime.utcnow()
         _extruder_last_error = None
         _extruder_last_error_at = None
+
+        # Persist each row to sensor_data so /dashboard/extruder/history has data (same logic as latest → history)
+        rows = result.get("rows") or []
+        if rows:
+            try:
+                machine_id, sensor_id = await _ensure_extruder_machine_and_sensor(session)
+                from app.schemas.sensor_data import SensorDataIn as SensorDataInSchema
+                from app.services import sensor_data_service
+                from sqlalchemy.exc import IntegrityError
+
+                def _safe_float(v):
+                    if v is None:
+                        return 0.0
+                    try:
+                        return float(v)
+                    except Exception:
+                        return 0.0
+
+                for r in rows:
+                    trend_str = r.get("TrendDate")
+                    if not trend_str:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(str(trend_str).replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    idempotency_key = f"{sensor_id}_{ts.isoformat()}"
+                    payload = SensorDataInSchema(
+                        sensor_id=sensor_id,
+                        machine_id=machine_id,
+                        timestamp=ts,
+                        value=_safe_float(r.get("Pressure_bar") or r.get("ScrewSpeed_rpm")),
+                        status="normal",
+                        metadata={
+                            "source": "mssql",
+                            "screw_rpm": r.get("ScrewSpeed_rpm"),
+                            "pressure_bar": r.get("Pressure_bar"),
+                            "temp_zone1_c": r.get("Temp_Zone1_C"),
+                            "temp_zone2_c": r.get("Temp_Zone2_C"),
+                            "temp_zone3_c": r.get("Temp_Zone3_C"),
+                            "temp_zone4_c": r.get("Temp_Zone4_C"),
+                        },
+                        idempotency_key=idempotency_key,
+                    )
+                    try:
+                        await sensor_data_service.ingest_sensor_data(session, payload)
+                    except IntegrityError:
+                        pass  # duplicate row, skip
+            except Exception as e:
+                logger.warning("Failed to persist extruder latest rows to history: %s", e)
+
         return result
     except HTTPException:
         raise
