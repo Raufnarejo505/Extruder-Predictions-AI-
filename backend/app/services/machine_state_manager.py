@@ -501,25 +501,78 @@ class MachineStateService:
             # Format state names for email
             from_state_name = from_state.value if from_state else "Unknown"
             to_state_name = to_state.value
-            
-            # Create email subject
-            subject = f"[PM Alert] Machine State Change - {machine_name}"
-            
-            # Create email body
-            body = f"""Machine State Change Notification
 
-Machine: {machine_name} (ID: {machine_id})
-Previous State: {from_state_name}
-New State: {to_state_name}
-Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
+            # Map states to German+English labels for nicer emails
+            state_labels = {
+                "OFF": "AUS (OFF)",
+                "HEATING": "AUFHEIZEN (HEATING)",
+                "IDLE": "BEREIT (IDLE)",
+                "PRODUCTION": "PRODUKTION (PRODUCTION)",
+                "COOLING": "ABKÜHLEN (COOLING)",
+            }
+            from_label = state_labels.get(from_state_name, from_state_name)
+            to_label = state_labels.get(to_state_name, to_state_name)
 
-State Transition Details:
-- Machine has transitioned from {from_state_name} to {to_state_name}
-- This is an automated notification from the Predictive Maintenance Platform
+            # Helper for a readable German-style timestamp
+            now_utc = datetime.utcnow()
+            month_names = [
+                "Januar", "Februar", "März", "April", "Mai", "Juni",
+                "Juli", "August", "September", "Oktober", "November", "Dezember"
+            ]
+            month_name = month_names[now_utc.month - 1]
+            pretty_ts = f"{now_utc.day:02d}. {month_name} {now_utc.year} – {now_utc.hour:02d}:{now_utc.minute:02d} UTC"
 
-Dashboard: http://localhost:3000
+            # Use a special template for transition into PRODUCTION, otherwise generic template
+            if to_state == MachineStateEnum.PRODUCTION and from_state != MachineStateEnum.PRODUCTION:
+                subject = f"Maschinenstatus – Produktionsstart – {machine_name}"
+                body = f"""Maschinenstatus – Produktionsstart
 
-Please review the machine status in the dashboard if needed.
+Maschine: {machine_name}
+
+Statusänderung
+Die Maschine hat den Produktionsbetrieb gestartet.
+
+Vorheriger Zustand: {from_label}
+Aktueller Zustand: {to_label}
+
+Zeitpunkt der Änderung:
+{pretty_ts}
+
+Bedeutung
+Das System hat anhand von Schneckendrehzahl, Druck und Temperatur erkannt, dass die Anlage in den aktiven Produktionsbetrieb gewechselt ist.
+Die Produktionsüberwachung und Prozessbewertung sind jetzt aktiv.
+
+Sie können nun die aktuellen Produktionsdaten sowie die Prozessstabilität im Dashboard einsehen.
+
+Dashboard-Zugriff:
+http://100.119.197.81:3000/
+
+Diese Benachrichtigung wurde automatisch von der Predictive-Maintenance-Plattform generiert.
+"""
+            else:
+                subject = f"Maschinenstatus – Zustandsänderung – {machine_name}"
+                body = f"""Maschinenstatus – Zustandsänderung
+
+Maschine: {machine_name}
+
+Statusänderung
+Die Maschine hat ihren Zustand geändert.
+
+Vorheriger Zustand: {from_label}
+Aktueller Zustand: {to_label}
+
+Zeitpunkt der Änderung:
+{pretty_ts}
+
+Bedeutung
+Das System hat anhand der Prozessdaten (z. B. Schneckendrehzahl, Druck und Temperatur) eine Zustandsänderung der Anlage erkannt.
+
+Sie können die aktuellen Zustände und Prozessdaten im Dashboard einsehen.
+
+Dashboard-Zugriff:
+http://100.119.197.81:3000/
+
+Diese Benachrichtigung wurde automatisch von der Predictive-Maintenance-Plattform generiert.
 """
             
             # Send email asynchronously (fire-and-forget) so it doesn't block state detection

@@ -754,20 +754,28 @@ export default function Dashboard() {
           const isBaselineActive =
             currentDashboardData?.baseline_status === 'ready' ||
             currentDashboardData?.baseline_status === 'learning';
+
+          // Prefer rows from /dashboard/extruder/derived (time-windowed, same structure as MSSQL)
+          // and fall back to /dashboard/extruder/latest if needed.
+          const sourceRows: any[] =
+            (mssqlDerived as any)?.rows && Array.isArray((mssqlDerived as any).rows) && (mssqlDerived as any).rows.length > 0
+              ? (mssqlDerived as any).rows
+              : (mssqlRows || []);
+
           // Prepare historical data for ScrewSpeed_rpm
-          const screwSpeedHistorical = (mssqlRows || []).map((row: any, index: number) => ({
-            timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+          const screwSpeedHistorical = sourceRows.map((row: any, index: number) => ({
+            timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
             value: parseFloat(row.ScrewSpeed_rpm) || 0,
           })).filter((d: any) => d.value > 0);
 
           // Prepare historical data for Pressure_bar
-          const pressureHistorical = (mssqlRows || []).map((row: any, index: number) => ({
-            timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+          const pressureHistorical = sourceRows.map((row: any, index: number) => ({
+            timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
             value: parseFloat(row.Pressure_bar) || 0,
           })).filter((d: any) => d.value > 0);
 
           // Prepare historical data for Temp_Avg
-          const tempAvgHistorical = (mssqlRows || []).map((row: any, index: number) => {
+          const tempAvgHistorical = sourceRows.map((row: any, index: number) => {
             const temps = [
               parseFloat(row.Temp_Zone1_C),
               parseFloat(row.Temp_Zone2_C),
@@ -776,13 +784,13 @@ export default function Dashboard() {
             ].filter((t): t is number => !isNaN(t) && t > 0);
             const avg = temps.length > 0 ? temps.reduce((a, b) => a + b, 0) / temps.length : 0;
             return {
-              timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+              timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: avg,
             };
           }).filter((d: any) => d.value > 0);
 
           // Prepare historical data for Temp_Spread (no baseline band, fixed thresholds)
-          const tempSpreadHistorical = (mssqlRows || []).map((row: any, index: number) => {
+          const tempSpreadHistorical = sourceRows.map((row: any, index: number) => {
             const temps = [
               parseFloat(row.Temp_Zone1_C),
               parseFloat(row.Temp_Zone2_C),
@@ -791,7 +799,7 @@ export default function Dashboard() {
             ].filter((t): t is number => !isNaN(t) && t > 0);
             const spread = temps.length >= 2 ? Math.max(...temps) - Math.min(...temps) : 0;
             return {
-              timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - index) * 60000),
+              timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: spread,
             };
           }).filter((d: any) => d.value > 0);
@@ -856,8 +864,8 @@ export default function Dashboard() {
                 {/* Temperature Zones Charts */}
                 {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => {
                   const zoneKey = `Temp_${zone}`;
-                  const zoneHistorical = (mssqlRows || []).map((row: any, idx: number) => ({
-                    timestamp: row.TrendDate || new Date(Date.now() - ((mssqlRows?.length || 0) - idx) * 60000),
+                  const zoneHistorical = sourceRows.map((row: any, idx: number) => ({
+                    timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
                     value: parseFloat(row[zoneKey]) || 0,
                   })).filter((d: any) => d.value > 0);
 
