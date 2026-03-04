@@ -4,16 +4,7 @@ import { safeApi } from '../api/safeApi';
 import { BackendOnlineBanner } from '../components/BackendOnlineBanner';
 import { DashboardSkeleton } from '../components/LoadingSkeleton';
 import { useT } from '../i18n/I18nProvider';
-import { SensorChart } from '../components/SensorChart';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { SimpleLiveChart } from '../components/SimpleLiveChart';
 
 const gradientClass = "min-h-screen bg-gradient-to-br from-slate-50 via-purple-50/30 to-slate-50 text-slate-900";
 const REFRESH_INTERVAL = 3000; // 3 seconds refresh interval
@@ -754,10 +745,6 @@ export default function Dashboard() {
         </div>
 
         {(() => {
-          const isBaselineActive =
-            currentDashboardData?.baseline_status === 'ready' ||
-            currentDashboardData?.baseline_status === 'learning';
-
           // Prefer rows from sensor_data‑backed history, then derived MSSQL window, then raw MSSQL latest.
           const sourceRows: any[] =
             (sensorHistoryRows && sensorHistoryRows.length > 0)
@@ -766,47 +753,51 @@ export default function Dashboard() {
                   ? (mssqlDerived as any).rows
                   : (mssqlRows || []));
 
+          // Prepare historical data: keep all valid numbers (include 0) so charts display like Temp_Spread
+          const validPoint = (d: { value: number }) =>
+            typeof d.value === 'number' && !isNaN(d.value);
+
           // Prepare historical data for ScrewSpeed_rpm
           const screwSpeedHistorical = sourceRows.map((row: any, index: number) => ({
             timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
-            value: parseFloat(row.ScrewSpeed_rpm) || 0,
-          })).filter((d: any) => d.value > 0);
+            value: parseFloat(row.ScrewSpeed_rpm) ?? parseFloat(row.screw_rpm) ?? 0,
+          })).filter(validPoint);
 
           // Prepare historical data for Pressure_bar
           const pressureHistorical = sourceRows.map((row: any, index: number) => ({
             timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
-            value: parseFloat(row.Pressure_bar) || 0,
-          })).filter((d: any) => d.value > 0);
+            value: parseFloat(row.Pressure_bar) ?? parseFloat(row.pressure_bar) ?? 0,
+          })).filter(validPoint);
 
           // Prepare historical data for Temp_Avg
           const tempAvgHistorical = sourceRows.map((row: any, index: number) => {
             const temps = [
-              parseFloat(row.Temp_Zone1_C),
-              parseFloat(row.Temp_Zone2_C),
-              parseFloat(row.Temp_Zone3_C),
-              parseFloat(row.Temp_Zone4_C),
-            ].filter((t): t is number => !isNaN(t) && t > 0);
+              parseFloat(row.Temp_Zone1_C ?? row.temp_zone1_c),
+              parseFloat(row.Temp_Zone2_C ?? row.temp_zone2_c),
+              parseFloat(row.Temp_Zone3_C ?? row.temp_zone3_c),
+              parseFloat(row.Temp_Zone4_C ?? row.temp_zone4_c),
+            ].filter((t): t is number => !isNaN(t));
             const avg = temps.length > 0 ? temps.reduce((a, b) => a + b, 0) / temps.length : 0;
             return {
               timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: avg,
             };
-          }).filter((d: any) => d.value > 0);
+          }).filter(validPoint);
 
           // Prepare historical data for Temp_Spread (no baseline band, fixed thresholds)
           const tempSpreadHistorical = sourceRows.map((row: any, index: number) => {
             const temps = [
-              parseFloat(row.Temp_Zone1_C),
-              parseFloat(row.Temp_Zone2_C),
-              parseFloat(row.Temp_Zone3_C),
-              parseFloat(row.Temp_Zone4_C),
-            ].filter((t): t is number => !isNaN(t) && t > 0);
+              parseFloat(row.Temp_Zone1_C ?? row.temp_zone1_c),
+              parseFloat(row.Temp_Zone2_C ?? row.temp_zone2_c),
+              parseFloat(row.Temp_Zone3_C ?? row.temp_zone3_c),
+              parseFloat(row.Temp_Zone4_C ?? row.temp_zone4_c),
+            ].filter((t): t is number => !isNaN(t));
             const spread = temps.length >= 2 ? Math.max(...temps) - Math.min(...temps) : 0;
             return {
               timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: spread,
             };
-          }).filter((d: any) => d.value > 0);
+          }).filter(validPoint);
 
           // Determine Temp_Spread color based on fixed thresholds (only meaningful in PRODUCTION)
           const latestSpread = tempSpreadHistorical.length > 0 ? tempSpreadHistorical[tempSpreadHistorical.length - 1].value : null;
@@ -823,171 +814,62 @@ export default function Dashboard() {
                 Sensor Charts (Baseline Comparison)
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* ScrewSpeed_rpm Chart */}
-                <SensorChart
+                {/* 1. Schneckendrehzahl (ScrewSpeed_rpm) – same style as Temp_Spread */}
+                <SimpleLiveChart
                   key="ScrewSpeed_rpm"
-                  sensorName="Schneckendrehzahl (ScrewSpeed_rpm)"
-                  currentValue={currentDashboardData?.metrics?.ScrewSpeed_rpm?.current_value}
-                  baselineMean={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline_mean}
-                  greenBand={currentDashboardData?.metrics?.ScrewSpeed_rpm?.green_band}
-                  historicalData={screwSpeedHistorical}
-                  severity={currentDashboardData?.metrics?.ScrewSpeed_rpm?.severity}
-                  deviation={currentDashboardData?.metrics?.ScrewSpeed_rpm?.deviation}
-                  baselineMaterial={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_material || null}
-                  baselineConfidence={currentDashboardData?.metrics?.ScrewSpeed_rpm?.baseline?.baseline_confidence}
-                  explanation={currentDashboardData?.metrics?.ScrewSpeed_rpm?.explanation || null}
-                  stability={currentDashboardData?.metrics?.ScrewSpeed_rpm?.stability || null}
-                  materialChanges={materialChanges}
+                  title="Schneckendrehzahl (ScrewSpeed_rpm)"
+                  data={screwSpeedHistorical}
                   unit="rpm"
-                  baselineReady={isBaselineActive}
-                  isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
 
-                {/* Pressure_bar Chart */}
-                <SensorChart
+                {/* 2. Schmelzedruck (Pressure_bar) */}
+                <SimpleLiveChart
                   key="Pressure_bar"
-                  sensorName="Schmelzedruck (Pressure_bar)"
-                  currentValue={currentDashboardData?.metrics?.Pressure_bar?.current_value}
-                  baselineMean={currentDashboardData?.metrics?.Pressure_bar?.baseline_mean}
-                  greenBand={currentDashboardData?.metrics?.Pressure_bar?.green_band}
-                  historicalData={pressureHistorical}
-                  severity={currentDashboardData?.metrics?.Pressure_bar?.severity}
-                  deviation={currentDashboardData?.metrics?.Pressure_bar?.deviation}
-                  baselineMaterial={currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_material || null}
-                  baselineConfidence={currentDashboardData?.metrics?.Pressure_bar?.baseline?.baseline_confidence}
-                  explanation={currentDashboardData?.metrics?.Pressure_bar?.explanation || null}
-                  stability={currentDashboardData?.metrics?.Pressure_bar?.stability || null}
-                  materialChanges={materialChanges}
+                  title="Schmelzedruck (Pressure_bar)"
+                  data={pressureHistorical}
                   unit="bar"
-                  baselineReady={isBaselineActive}
-                  isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
 
-                {/* Temperature Zones Charts */}
+                {/* 3–6. Temperature Zones */}
                 {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => {
                   const zoneKey = `Temp_${zone}`;
+                  const altKey = `temp_zone${index + 1}_c`;
                   const zoneHistorical = sourceRows.map((row: any, idx: number) => ({
                     timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
-                    value: parseFloat(row[zoneKey]) || 0,
-                  })).filter((d: any) => d.value > 0);
-
-                  const metricData = currentDashboardData?.metrics?.[zoneKey] || null;
-                  const baselineMean = metricData?.baseline_mean || null;
-                  const greenBand = metricData?.green_band || null;
-                  const currentValue = metricData?.current_value || parseFloat(mssqlRows?.[0]?.[zoneKey]) || null;
-                  const severity = metricData?.severity ?? (mssqlDerived?.risk?.sensors[zoneKey] === 'red' ? 2 : 
-                                                           mssqlDerived?.risk?.sensors[zoneKey] === 'yellow' ? 1 :
-                                                           mssqlDerived?.risk?.sensors[zoneKey] === 'green' ? 0 : null);
-                  const deviation = metricData?.deviation || null;
-                  const baselineMaterial = metricData?.baseline?.baseline_material || null;
-                  const baselineConfidence = metricData?.baseline?.baseline_confidence || null;
-                  const explanation = metricData?.explanation || null;
-                  const stability = metricData?.stability || null;
-
+                    value: parseFloat(row[zoneKey] ?? row[altKey]) ?? 0,
+                  })).filter(validPoint);
                   return (
-                    <SensorChart
+                    <SimpleLiveChart
                       key={zoneKey}
-                      sensorName={`Temperatur Zone ${index + 1} (${zoneKey})`}
-                      currentValue={currentValue}
-                      baselineMean={baselineMean}
-                      greenBand={greenBand}
-                      historicalData={zoneHistorical}
-                      severity={severity}
-                      deviation={deviation}
-                      baselineMaterial={baselineMaterial}
-                      baselineConfidence={baselineConfidence}
-                      explanation={explanation}
-                      stability={stability}
-                      materialChanges={materialChanges}
+                      title={`Temperatur Zone ${index + 1} (${zoneKey})`}
+                      data={zoneHistorical}
                       unit="°C"
-                      baselineReady={isBaselineActive}
-                      isInProduction={machineState === 'PRODUCTION'}
                       height={300}
                     />
                   );
                 })}
 
-                {/* Temp_Avg Chart */}
-                <SensorChart
+                {/* 7. Durchschnittstemperatur (Temp_Avg) */}
+                <SimpleLiveChart
                   key="Temp_Avg"
-                  sensorName="Durchschnittstemperatur (Temp_Avg)"
-                  currentValue={currentDashboardData?.metrics?.Temp_Avg?.current_value || mssqlDerived?.derived?.Temp_Avg?.current}
-                  baselineMean={currentDashboardData?.metrics?.Temp_Avg?.baseline_mean}
-                  greenBand={currentDashboardData?.metrics?.Temp_Avg?.green_band}
-                  historicalData={tempAvgHistorical}
-                  severity={currentDashboardData?.metrics?.Temp_Avg?.severity}
-                  deviation={currentDashboardData?.metrics?.Temp_Avg?.deviation}
-                  baselineMaterial={currentDashboardData?.metrics?.Temp_Avg?.baseline?.baseline_material || null}
-                  baselineConfidence={currentDashboardData?.metrics?.Temp_Avg?.baseline?.baseline_confidence}
-                  explanation={currentDashboardData?.metrics?.Temp_Avg?.explanation || null}
-                  stability={currentDashboardData?.metrics?.Temp_Avg?.stability || null}
-                  materialChanges={materialChanges}
+                  title="Durchschnittstemperatur (Temp_Avg)"
+                  data={tempAvgHistorical}
                   unit="°C"
-                  baselineReady={isBaselineActive}
-                  isInProduction={machineState === 'PRODUCTION'}
                   height={300}
                 />
 
-                {/* Temp_Spread Chart (fixed thresholds, no baseline band) */}
-                <div className="bg-white/95 backdrop-blur-sm border-2 border-slate-200/80 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
-                  <div className="mb-5">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="text-xl font-bold text-slate-900">Temperaturspreizung (Temp_Spread)</h3>
-                    </div>
-                    <p className="text-xs text-slate-600">
-                      Bewertung ohne Baseline: ≤5°C 🟢, 5–8°C 🟠, &gt;8°C 🔴
-                    </p>
-                  </div>
-                  <div style={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={tempSpreadHistorical.map(d => ({
-                          ...d,
-                          timeLabel: new Date(d.timestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
-                        }))}
-                        margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis
-                          dataKey="timeLabel"
-                          tick={{ fill: '#64748b', fontSize: 11 }}
-                          interval="preserveStartEnd"
-                        />
-                        <YAxis
-                          tick={{ fill: '#64748b', fontSize: 11 }}
-                          label={{
-                            value: '°C',
-                            angle: -90,
-                            position: 'insideLeft',
-                            style: { textAnchor: 'middle', fill: '#64748b' },
-                          }}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#ffffff',
-                            border: '1px solid #cbd5e1',
-                            borderRadius: '6px',
-                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                          }}
-                          labelStyle={{ color: '#1e293b', fontWeight: '600' }}
-                          formatter={(value: number) => [`${value.toFixed(2)} °C`, 'Temp_Spread']}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="value"
-                          stroke={tempSpreadColor}
-                          strokeWidth={2.5}
-                          dot={{ fill: tempSpreadColor, r: 3 }}
-                          activeDot={{ r: 5 }}
-                          name="Temp_Spread"
-                          isAnimationActive={true}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+                {/* 8. Temperaturspreizung (Temp_Spread) – same component, threshold-based color */}
+                <SimpleLiveChart
+                  key="Temp_Spread"
+                  title="Temperaturspreizung (Temp_Spread)"
+                  legend="Bewertung ohne Baseline: ≤5°C 🟢, 5–8°C 🟠, >8°C 🔴"
+                  data={tempSpreadHistorical}
+                  unit="°C"
+                  lineColor={tempSpreadColor}
+                  height={300}
+                />
               </div>
             </div>
           );
