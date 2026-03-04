@@ -2179,9 +2179,17 @@ async def get_current_dashboard_data(
             bmin = green_band.get("min") if isinstance(green_band, dict) else None
             bmax = green_band.get("max") if isinstance(green_band, dict) else None
 
+        # Detect whether we effectively have a baseline (from profile or rolling)
+        has_baseline_mean = (
+            baseline_mean is not None
+            or (standardized_baseline and isinstance(standardized_baseline, dict) and standardized_baseline.get("baseline_mean") is not None)
+        )
+        has_baseline_range = bmin is not None and bmax is not None
+
         if current_value is None:
             explanation = f"{key}: no current value available"
-        elif baseline_mean is None or green_band is None:
+        elif not has_baseline_mean and not has_baseline_range:
+            # Truly no baseline information available
             explanation = f"{key}: baseline not available for material {mat}" if mat else f"{key}: baseline not available"
         else:
             # If stability upgraded severity, say so explicitly (early warning).
@@ -2191,11 +2199,26 @@ async def get_current_dashboard_data(
                     f"(stability {stability_state_for_sensor}) for material {mat}"
                 )
             elif final_severity == 0:
-                explanation = f"{key}: within baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: within baseline band"
+                if has_baseline_range and mat:
+                    explanation = f"{key}: within baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}"
+                elif has_baseline_range:
+                    explanation = f"{key}: within baseline band [{bmin:.1f}–{bmax:.1f}]"
+                else:
+                    explanation = f"{key}: within baseline range for material {mat}" if mat else f"{key}: within baseline range"
             elif final_severity == 1:
-                explanation = f"{key}: slightly outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: slight deviation from baseline"
+                if has_baseline_range and mat:
+                    explanation = f"{key}: slightly outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}"
+                elif has_baseline_range:
+                    explanation = f"{key}: slight deviation from baseline band [{bmin:.1f}–{bmax:.1f}]"
+                else:
+                    explanation = f"{key}: slight deviation from baseline for material {mat}" if mat else f"{key}: slight deviation from baseline"
             elif final_severity == 2:
-                explanation = f"{key}: outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}" if (bmin is not None and bmax is not None and mat) else f"{key}: critical deviation from baseline"
+                if has_baseline_range and mat:
+                    explanation = f"{key}: outside baseline band [{bmin:.1f}–{bmax:.1f}] for material {mat}"
+                elif has_baseline_range:
+                    explanation = f"{key}: critical deviation from baseline band [{bmin:.1f}–{bmax:.1f}]"
+                else:
+                    explanation = f"{key}: critical deviation from baseline for material {mat}" if mat else f"{key}: critical deviation from baseline"
             else:
                 explanation = f"{key}: evaluation status unknown"
 
