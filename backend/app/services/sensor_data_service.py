@@ -19,16 +19,16 @@ async def ingest_sensor_data(session: AsyncSession, payload: SensorDataIn) -> Se
     # Create SensorData directly from payload, ensuring UUIDs stay as UUID objects
     # Don't use model_dump() as it converts UUIDs to strings
     sensor_data = SensorData(
-        sensor_id=payload.sensor_id,  # Keep as UUID object
-        machine_id=payload.machine_id,  # Keep as UUID object
+        sensor_id=payload.sensor_id,
+        machine_id=payload.machine_id,
         timestamp=payload.timestamp,
         value=payload.value,
         status=payload.status,
-        metadata_json=payload.metadata,  # Map metadata to metadata_json
+        metadata_json=payload.metadata,
+        idempotency_key=payload.idempotency_key if getattr(payload, "idempotency_key", None) else None,
     )
     session.add(sensor_data)
     await session.commit()
-    # Refresh only specific columns to avoid issues with missing columns
     await session.refresh(sensor_data, ["id", "created_at", "updated_at"])
     
     # Broadcast real-time update for dashboard

@@ -431,7 +431,7 @@ class MSSQLExtruderPoller:
                 pass
 
     async def _persist_sensor_snapshot(self, ts: datetime, readings: Dict[str, float]) -> None:
-        """Persist the latest sensor snapshot to sensor_data in its own session. Does not depend on AI or prediction."""
+        """Persist a single sensor snapshot to sensor_data. Used for backward compatibility; prefer _persist_one_row for per-row storage."""
         if self._machine_id is None or self._sensor_id is None:
             return
         try:
@@ -458,6 +458,42 @@ class MSSQLExtruderPoller:
                 await sensor_data_service.ingest_sensor_data(session, sensor_payload)
         except Exception as e:
             logger.error(f"Failed to persist MSSQL snapshot into sensor_data: {e}", exc_info=True)
+
+    async def _persist_one_row(self, row: ExtruderSqlRow) -> None:
+        """Persist one MSSQL row to sensor_data. Uses idempotency_key to avoid duplicates on restart/re-poll."""
+        if self._machine_id is None or self._sensor_id is None:
+            return
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            from app.schemas.sensor_data import SensorDataIn as SensorDataInSchema
+            from app.services import sensor_data_service
+
+            ts = row.trend_date
+            idempotency_key = f"{self._sensor_id}_{ts.isoformat()}"
+            sensor_payload = SensorDataInSchema(
+                sensor_id=self._sensor_id,
+                machine_id=self._machine_id,
+                timestamp=ts,
+                value=float(row.pressure_bar or row.screw_speed_rpm or 0.0),
+                status="normal",
+                metadata={
+                    "source": "mssql",
+                    "screw_rpm": row.screw_speed_rpm,
+                    "pressure_bar": row.pressure_bar,
+                    "temp_zone1_c": row.temp_zone1_c,
+                    "temp_zone2_c": row.temp_zone2_c,
+                    "temp_zone3_c": row.temp_zone3_c,
+                    "temp_zone4_c": row.temp_zone4_c,
+                },
+                idempotency_key=idempotency_key,
+            )
+            async with AsyncSessionLocal() as session:
+                await sensor_data_service.ingest_sensor_data(session, sensor_payload)
+        except IntegrityError:
+            logger.debug("MSSQL snapshot row already stored (idempotency_key), skipping")
+        except Exception as e:
+            logger.error(f"Failed to persist MSSQL row into sensor_data: {e}", exc_info=True)
 
     async def _persist_prediction(self, *, ts: datetime, ai_result: Dict[str, Any], readings: Dict[str, float], meta: Dict[str, Any]) -> None:
         if self._machine_id is None or self._sensor_id is None:
@@ -750,6 +786,9 @@ class MSSQLExtruderPoller:
                 new_rows = await asyncio.to_thread(self._fetch_rows_sync)
                 if new_rows:
                     logger.info(f"📥 MSSQL poller fetched {len(new_rows)} new rows")
+                    # Persist each new row to sensor_data so /dashboard/extruder/history has data
+                    for r in new_rows:
+                        await self._persist_one_row(r)
                     for r in new_rows:
                         self._window.append(r)
                     self._window.sort(key=lambda x: x.trend_date)
@@ -763,9 +802,6 @@ class MSSQLExtruderPoller:
                     logger.info(
                         f"🔄 Processing MSSQL data: ts={ts.isoformat()}, readings={readings}, window_size={meta.get('window_size')}"
                     )
-
-                    # Persist sensor snapshot to DB first (own session) so history is stored even if AI/prediction fails
-                    await self._persist_sensor_snapshot(ts=ts, readings=readings)
 
                     ai_result = await self._score_with_ai_service(ts=ts, readings=readings)
                     await self._persist_prediction(ts=ts, ai_result=ai_result, readings=readings, meta=meta)

@@ -16,7 +16,7 @@ class SensorDataIn(BaseModel):
         validation_alias=AliasChoices("metadata", "metadata_json"),
         serialization_alias="metadata",
     )
-
+    idempotency_key: Optional[str] = None
 
 
 class SensorDataOut(SensorDataIn):
