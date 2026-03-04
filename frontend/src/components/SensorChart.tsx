@@ -6,10 +6,7 @@ import {
   ReferenceArea,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
   ResponsiveContainer,
-  Legend,
 } from 'recharts';
 
 interface SensorChartProps {
@@ -43,6 +40,8 @@ interface SensorChartProps {
   baselineReady: boolean;
   /** Whether machine is in PRODUCTION state */
   isInProduction: boolean;
+  /** Deviation vs. setup in percent for badge logic (e.g. +20) */
+  setupDeviation?: number | null | undefined;
   /** Chart height */
   height?: number;
 }
@@ -63,19 +62,16 @@ export const SensorChart: React.FC<SensorChartProps> = ({
   unit,
   baselineReady,
   isInProduction,
+  setupDeviation,
   height = 300,
 }) => {
-  // Determine curve color based on severity
-  const curveColor = useMemo(() => {
-    if (severity === 2) return '#ef4444'; // red-500
-    if (severity === 1) return '#f59e0b'; // amber-500
-    if (severity === 0) return '#10b981'; // emerald-500
-    return '#94a3b8'; // slate-400 (unknown/neutral)
-  }, [severity]);
-
-  // Prepare chart data
+  // Prepare chart data and split into history vs. live segment
   const chartData = useMemo(() => {
-    return historicalData.map((point) => {
+    if (!historicalData || historicalData.length === 0) {
+      return [];
+    }
+
+    const base = historicalData.map((point) => {
       const timestampDate = typeof point.timestamp === 'string' ? new Date(point.timestamp) : point.timestamp;
       return {
         timestamp: typeof point.timestamp === 'string' ? point.timestamp : point.timestamp.toISOString(),
@@ -86,7 +82,26 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         timestampDate: timestampDate,
       };
     });
-  }, [historicalData]);
+
+    const total = base.length;
+    const liveWindow = 10;
+    const startLiveIndex = Math.max(0, total - liveWindow);
+
+    return base.map((point, index) => {
+      const inLiveWindow = index >= startLiveIndex;
+      const outOfBaseline =
+        baselineReady &&
+        !!greenBand &&
+        (point.value < greenBand.min || point.value > greenBand.max);
+
+      return {
+        ...point,
+        historyValue: point.value,
+        // Red live series only for the last N points AND outside the baseline band
+        liveValue: inLiveWindow && outOfBaseline ? point.value : null,
+      };
+    });
+  }, [historicalData, baselineReady, greenBand]);
   
   // Prepare material change markers (find closest data points)
   const materialChangeMarkers = useMemo(() => {
@@ -151,10 +166,19 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       : null;
     
     if (pctDev) {
-      return `Abweichung: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
+      return `${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit} (${pctDev}%)`;
     }
-    return `Abweichung: ${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
+    return `${deviation > 0 ? '+' : ''}${deviation.toFixed(2)} ${unit}`;
   }, [deviation, baselineMean, unit, baselineReady]);
+
+  // Setup deviation badge text ("SETUP-ABWEICHUNG +20%")
+  const setupDeviationBadge = useMemo(() => {
+    if (setupDeviation === null || setupDeviation === undefined) return null;
+    if (Math.abs(setupDeviation) <= 10) return null;
+    const rounded = Math.round(setupDeviation);
+    const sign = rounded > 0 ? '+' : '';
+    return `SETUP-ABWEICHUNG ${sign}${rounded}%`;
+  }, [setupDeviation]);
 
   // Chart domain calculation
   const allValues = [
@@ -240,43 +264,48 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       </div>
 
       {/* Status and Deviation Info */}
-      <div className="mb-5 flex flex-wrap gap-4 text-sm bg-slate-50/50 rounded-lg p-3 border border-slate-200/50">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-slate-700">Status:</span>
-          <span className={`font-bold px-2 py-1 rounded-md ${
-            showBaseline && isInProduction && severity === 2 ? 'bg-rose-100 text-rose-700 border border-rose-300' : 
-            showBaseline && isInProduction && severity === 1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
-            showBaseline && isInProduction && severity === 0 ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 
-            'bg-slate-100 text-slate-500 border border-slate-300'
-          }`}>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-4 text-sm bg-slate-50/50 rounded-lg p-3 border border-slate-200/50">
+        {/* Left: colored dot + exact German status text */}
+        <div className="flex items-center gap-3">
+          <span
+            className="w-3 h-3 rounded-full"
+            style={{
+              backgroundColor:
+                severity === 2 ? '#ef4444' :
+                severity === 1 ? '#f59e0b' :
+                severity === 0 ? '#10b981' :
+                '#9ca3af',
+            }}
+          />
+          <span className="font-semibold text-slate-800">
             {statusText}
           </span>
         </div>
         {deviationText && showBaseline && (
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-700">Abweichung:</span>
-            <span className={`font-bold px-2 py-1 rounded-md ${
-              isInProduction && Math.abs(deviation || 0) > (baselineMean! * 0.1) ? 'bg-amber-100 text-amber-700 border border-amber-300' : 
-              'bg-slate-100 text-slate-600 border border-slate-300'
-            }`}>
+            <span
+              className={`font-bold px-2 py-1 rounded-md ${
+                isInProduction && Math.abs(deviation || 0) > (baselineMean! * 0.1)
+                  ? 'bg-amber-100 text-amber-700 border border-amber-300'
+                  : 'bg-slate-100 text-slate-600 border border-slate-300'
+              }`}
+            >
               {deviationText}
             </span>
           </div>
         )}
         {currentValue !== null && currentValue !== undefined && (
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-2">
-              <span className="font-semibold text-slate-700">LIVE</span>
-              <span className="text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500 text-white">
-                Live
-              </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-bold uppercase tracking-wide px-3 py-1 rounded-full bg-emerald-600 text-white shadow-sm">
+              LIVE
             </span>
-            <span className="font-extrabold px-2 py-1 rounded-md border-2" style={{ 
-              color: curveColor, 
-              backgroundColor: `${curveColor}15`,
-              borderColor: curveColor
-            }}>
-              {currentValue.toFixed(2)} {unit}
+            <span className="font-extrabold px-3 py-1 rounded-md border border-emerald-600 text-emerald-700 bg-emerald-50">
+              {currentValue.toLocaleString('de-DE', {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1,
+              })}{' '}
+              {unit}
             </span>
           </div>
         )}
@@ -291,35 +320,25 @@ export const SensorChart: React.FC<SensorChartProps> = ({
       {/* Chart */}
       <div style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <LineChart data={chartData} margin={{ top: 5, right: 12, left: 4, bottom: 0 }}>
             <XAxis
               dataKey="timeLabel"
-              tick={{ fill: '#64748b', fontSize: 11 }}
+              tick={{ fill: '#9ca3af', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
               interval="preserveStartEnd"
             />
             <YAxis
               domain={yDomain}
-              tick={{ fill: '#64748b', fontSize: 11 }}
-              label={{ value: unit, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#64748b' } }}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#ffffff',
-                border: '1px solid #cbd5e1',
-                borderRadius: '6px',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+              tick={{ fill: '#9ca3af', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
+              label={{
+                value: unit,
+                angle: -90,
+                position: 'insideLeft',
+                style: { textAnchor: 'middle', fill: '#9ca3af' },
               }}
-              labelStyle={{ color: '#1e293b', fontWeight: '600' }}
-              formatter={(value: number, name: string) => {
-                if (name === 'value') return [`${value.toFixed(2)} ${unit}`, 'Live‑Wert'];
-                if (name === 'baseline') return [`${value.toFixed(2)} ${unit}`, 'Baseline‑Mittelwert'];
-                return [value, name];
-              }}
-            />
-            <Legend
-              wrapperStyle={{ paddingTop: '10px' }}
-              iconType="line"
             />
 
             {/* Green Baseline Band (shaded area between min and max) */}
@@ -333,18 +352,37 @@ export const SensorChart: React.FC<SensorChartProps> = ({
               />
             )}
 
+            {/* Dashed Baseline Bounds */}
+            {showBaseline && greenBand && (
+              <>
+                <ReferenceLine
+                  y={greenBand.min}
+                  stroke="#10b981"
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                />
+                <ReferenceLine
+                  y={greenBand.max}
+                  stroke="#10b981"
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                />
+              </>
+            )}
+
             {/* Dashed Baseline Mean Line */}
             {showBaseline && (
               <ReferenceLine
                 y={baselineMean}
-                stroke="#9ca3af" // gray-400
+                stroke="#059669"
                 strokeWidth={2}
                 strokeDasharray="5 5"
                 label={{
-                  value: `Baseline`,
+                  value: baselineMaterial ? `Baseline (${baselineMaterial})` : 'Baseline',
                   position: 'right',
-                  fill: '#6b7280', // gray-500
+                  fill: '#059669',
                   fontSize: 11,
+                  fontStyle: 'italic',
                 }}
               />
             )}
@@ -367,16 +405,23 @@ export const SensorChart: React.FC<SensorChartProps> = ({
               />
             ))}
 
-            {/* Live Value Curve (colored by status) */}
+            {/* History curve (green) */}
             <Line
               type="monotone"
-              dataKey="value"
-              stroke={curveColor}
+              dataKey="historyValue"
+              stroke="#10b981"
               strokeWidth={2.5}
-              dot={{ fill: curveColor, r: 3 }}
-              activeDot={{ r: 5 }}
-              name="Live Value"
-              isAnimationActive={true}
+              dot={false}
+              isAnimationActive={false}
+            />
+            {/* Live out-of-baseline segment (red spike) */}
+            <Line
+              type="monotone"
+              dataKey="liveValue"
+              stroke="#ef4444"
+              strokeWidth={2.5}
+              dot={{ r: 3, stroke: '#ef4444', fill: '#ef4444' }}
+              isAnimationActive={false}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -387,14 +432,21 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         <div className="mt-5 pt-4 border-t border-slate-200 text-xs text-slate-600 space-y-2">
           <div className="flex items-center gap-2">
             <span className="w-3 h-3 rounded bg-emerald-500/15 border border-emerald-500/40"></span>
-            <span className="font-semibold">Baseline Range:</span> 
+            <span className="font-semibold">Baseline-Bereich:</span> 
             <span className="font-bold text-slate-800">{greenBand.min.toFixed(2)} - {greenBand.max.toFixed(2)} {unit}</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-3 rounded border-2 border-dashed border-slate-400"></span>
-            <span className="font-semibold">Baseline Mean:</span> 
+            <span className="font-semibold">Baseline-Mittelwert:</span> 
             <span className="font-bold text-slate-800">{baselineMean.toFixed(2)} {unit}</span>
           </div>
+          {setupDeviationBadge && (
+            <div className="pt-1">
+              <span className="inline-flex items-center px-3 py-1 rounded-full border border-amber-500 bg-amber-50 text-amber-700 text-[11px] font-extrabold tracking-wide uppercase">
+                {setupDeviationBadge}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
