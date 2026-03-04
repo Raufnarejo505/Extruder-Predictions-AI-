@@ -417,6 +417,115 @@ async def get_extruder_history_from_sensor_data(
 
     return {"rows": out}
 
+
+@router.get("/extruder/history/diagnostic")
+async def get_extruder_history_diagnostic(
+    current_user: User = Depends(require_viewer),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Diagnose why /dashboard/extruder/history might be empty.
+    Call this to see: machine/sensor lookup, sensor_data counts, poller state, and next steps.
+    """
+    from sqlalchemy import select as sql_select, func
+    from app.models.sensor import Sensor
+    from app.models.sensor_data import SensorData
+    from app.services.mssql_extruder_poller import mssql_extruder_poller
+
+    # Same lookup as history endpoint
+    machines = await session.scalars(
+        sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1)
+    )
+    machine = machines.first()
+    sensor = None
+    if machine:
+        sensors = await session.scalars(
+            sql_select(Sensor)
+            .where(
+                and_(
+                    Sensor.machine_id == machine.id,
+                    Sensor.name == "Extruder SQL Snapshot",
+                )
+            )
+            .limit(1)
+        )
+        sensor = sensors.first()
+
+    # Count sensor_data for this sensor (use UUID for reliable comparison)
+    sensor_data_count = 0
+    if sensor:
+        from uuid import UUID
+        sid = sensor.id if isinstance(sensor.id, UUID) else UUID(str(sensor.id))
+        r = await session.execute(
+            sql_select(func.count(SensorData.id)).where(SensorData.sensor_id == sid)
+        )
+        sensor_data_count = r.scalar() or 0
+
+    # Total sensor_data rows (any sensor) to see if poller writes at all
+    total_r = await session.execute(sql_select(func.count(SensorData.id)))
+    sensor_data_total_count = total_r.scalar() or 0
+
+    poller_task = getattr(mssql_extruder_poller, "_task", None)
+    poller_running = poller_task is not None and not poller_task.done()
+    poller_sensor_id = getattr(mssql_extruder_poller, "_sensor_id", None)
+    poller_machine_id = getattr(mssql_extruder_poller, "_machine_id", None)
+    poller_effective_enabled = getattr(mssql_extruder_poller, "_effective_enabled", False)
+    poller_last_trend_date = getattr(mssql_extruder_poller, "_last_trend_date", None)
+    poller_window_size = len(getattr(mssql_extruder_poller, "_window", []))
+
+    ids_match = (
+        (sensor is not None and poller_sensor_id is not None)
+        and (str(sensor.id) == str(poller_sensor_id))
+    )
+
+    issues = []
+    if not machine:
+        issues.append("History lookup: no machine named 'Extruder-SQL' found.")
+    if machine and not sensor:
+        issues.append("History lookup: no sensor named 'Extruder SQL Snapshot' for that machine.")
+    if sensor_data_count == 0 and sensor:
+        issues.append("No sensor_data rows for the extruder sensor — poller may not be writing or has not run yet.")
+    if not poller_running:
+        issues.append("MSSQL poller task is not running (check MSSQL_ENABLED and startup).")
+    if not poller_effective_enabled:
+        issues.append("Poller is disabled in DB — enable Settings → Connections → MSSQL.")
+    if poller_window_size == 0 and poller_running:
+        issues.append("Poller is running but window is empty — no rows fetched from MSSQL yet (check query/timezone).")
+    if sensor and poller_sensor_id is not None and not ids_match:
+        issues.append("Poller sensor_id does not match history sensor_id — different sensor used.")
+    if not issues:
+        issues.append("No obvious issue; if history is still empty, check backend logs for 'Failed to persist MSSQL'.")
+
+    return {
+        "history_lookup": {
+            "machine_found": machine is not None,
+            "machine_id": str(machine.id) if machine else None,
+            "machine_name": machine.name if machine else None,
+            "sensor_found": sensor is not None,
+            "sensor_id": str(sensor.id) if sensor else None,
+            "sensor_name": sensor.name if sensor else None,
+            "sensor_data_count_for_sensor": sensor_data_count,
+        },
+        "sensor_data_total_count": sensor_data_total_count,
+        "poller": {
+            "running": poller_running,
+            "effective_enabled": poller_effective_enabled,
+            "machine_id": str(poller_machine_id) if poller_machine_id else None,
+            "sensor_id": str(poller_sensor_id) if poller_sensor_id else None,
+            "last_trend_date": poller_last_trend_date.isoformat() if poller_last_trend_date else None,
+            "window_size": poller_window_size,
+        },
+        "ids_match": ids_match,
+        "issues": issues,
+        "next_steps": [
+            "Ensure backend is rebuilt/restarted so poller code that writes sensor_data is running.",
+            "Enable MSSQL in Settings → Connections so the poller fetches and stores rows.",
+            "Wait at least one poll interval (e.g. 60s) after enabling; then call /dashboard/extruder/history again.",
+            "Check backend logs for 'MSSQL poller fetched' and 'Failed to persist MSSQL'.",
+        ],
+    }
+
+
 @router.get("/extruder/status")
 async def get_extruder_status(
     current_user: User = Depends(require_viewer),

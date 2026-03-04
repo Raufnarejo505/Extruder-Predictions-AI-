@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import List
+from typing import List, Union
+from uuid import UUID
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,12 +69,14 @@ async def bulk_ingest(session: AsyncSession, rows: List[SensorDataIn]) -> None:
 
 async def recent_sensor_data(
     session: AsyncSession,
-    sensor_id: str,
+    sensor_id: Union[str, UUID],
     limit: int = 100,
 ):
+    """Return rows for the given sensor, oldest-first. sensor_id can be str or UUID."""
+    sid = sensor_id if isinstance(sensor_id, UUID) else UUID(str(sensor_id))
     stmt = (
         select(SensorData)
-        .where(SensorData.sensor_id == sensor_id)
+        .where(SensorData.sensor_id == sid)
         .order_by(SensorData.timestamp.desc())
         .limit(limit)
     )
