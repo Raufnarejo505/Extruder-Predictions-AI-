@@ -757,44 +757,54 @@ export default function Dashboard() {
           const validPoint = (d: { value: number }) =>
             typeof d.value === 'number' && !isNaN(d.value);
 
+          // Robust read: support both API shapes (TrendDate/Temp_Zone1_C and trend_date/temp_zone1_c)
+          const num = (row: any, ...keys: string[]) => {
+            for (const k of keys) {
+              const v = row?.[k];
+              if (v !== undefined && v !== null && v !== '') {
+                const n = parseFloat(v);
+                if (!isNaN(n)) return n;
+              }
+            }
+            return 0;
+          };
+
           // Prepare historical data for ScrewSpeed_rpm
           const screwSpeedHistorical = sourceRows.map((row: any, index: number) => ({
-            timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
-            value: parseFloat(row.ScrewSpeed_rpm) ?? parseFloat(row.screw_rpm) ?? 0,
+            timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
+            value: num(row, 'ScrewSpeed_rpm', 'screw_rpm'),
           })).filter(validPoint);
 
           // Prepare historical data for Pressure_bar
           const pressureHistorical = sourceRows.map((row: any, index: number) => ({
-            timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
-            value: parseFloat(row.Pressure_bar) ?? parseFloat(row.pressure_bar) ?? 0,
+            timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
+            value: num(row, 'Pressure_bar', 'pressure_bar'),
           })).filter(validPoint);
 
           // Prepare historical data for Temp_Avg
           const tempAvgHistorical = sourceRows.map((row: any, index: number) => {
-            const temps = [
-              parseFloat(row.Temp_Zone1_C ?? row.temp_zone1_c),
-              parseFloat(row.Temp_Zone2_C ?? row.temp_zone2_c),
-              parseFloat(row.Temp_Zone3_C ?? row.temp_zone3_c),
-              parseFloat(row.Temp_Zone4_C ?? row.temp_zone4_c),
-            ].filter((t): t is number => !isNaN(t));
-            const avg = temps.length > 0 ? temps.reduce((a, b) => a + b, 0) / temps.length : 0;
+            const t1 = num(row, 'Temp_Zone1_C', 'temp_zone1_c');
+            const t2 = num(row, 'Temp_Zone2_C', 'temp_zone2_c');
+            const t3 = num(row, 'Temp_Zone3_C', 'temp_zone3_c');
+            const t4 = num(row, 'Temp_Zone4_C', 'temp_zone4_c');
+            const vals = [t1, t2, t3, t4].filter((t) => !isNaN(t));
+            const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
             return {
-              timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
+              timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: avg,
             };
           }).filter(validPoint);
 
           // Prepare historical data for Temp_Spread (no baseline band, fixed thresholds)
           const tempSpreadHistorical = sourceRows.map((row: any, index: number) => {
-            const temps = [
-              parseFloat(row.Temp_Zone1_C ?? row.temp_zone1_c),
-              parseFloat(row.Temp_Zone2_C ?? row.temp_zone2_c),
-              parseFloat(row.Temp_Zone3_C ?? row.temp_zone3_c),
-              parseFloat(row.Temp_Zone4_C ?? row.temp_zone4_c),
-            ].filter((t): t is number => !isNaN(t));
+            const t1 = num(row, 'Temp_Zone1_C', 'temp_zone1_c');
+            const t2 = num(row, 'Temp_Zone2_C', 'temp_zone2_c');
+            const t3 = num(row, 'Temp_Zone3_C', 'temp_zone3_c');
+            const t4 = num(row, 'Temp_Zone4_C', 'temp_zone4_c');
+            const temps = [t1, t2, t3, t4].filter((t) => !isNaN(t));
             const spread = temps.length >= 2 ? Math.max(...temps) - Math.min(...temps) : 0;
             return {
-              timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
+              timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - index) * 60000),
               value: spread,
             };
           }).filter(validPoint);
@@ -808,18 +818,47 @@ export default function Dashboard() {
             else if (latestSpread > 5) tempSpreadColor = '#f59e0b'; // orange
           }
 
+          // Line color for temperature (zone/avg): 170–180 °C 🟢, 165–185 °C 🟠, outside 🔴
+          const tempColor = (v: number | null) => {
+            if (v === null || v === undefined) return '#94a3b8';
+            if (v >= 170 && v <= 180) return '#10b981';
+            if (v >= 165 && v <= 185) return '#f59e0b';
+            return '#ef4444';
+          };
+          const lastTempAvg = tempAvgHistorical.length > 0 ? tempAvgHistorical[tempAvgHistorical.length - 1].value : null;
+
+          // Line color for pressure: 350–400 bar 🟢, 300–450 bar 🟠, outside 🔴
+          const pressureColor = (v: number | null) => {
+            if (v === null || v === undefined) return '#94a3b8';
+            if (v >= 350 && v <= 400) return '#10b981';
+            if (v >= 300 && v <= 450) return '#f59e0b';
+            return '#ef4444';
+          };
+          const lastPressure = pressureHistorical.length > 0 ? pressureHistorical[pressureHistorical.length - 1].value : null;
+
+          // Line color for screw speed: 8–14 rpm 🟢, 5–18 rpm 🟠, outside 🔴
+          const screwColor = (v: number | null) => {
+            if (v === null || v === undefined) return '#94a3b8';
+            if (v >= 8 && v <= 14) return '#10b981';
+            if (v >= 5 && v <= 18) return '#f59e0b';
+            return '#ef4444';
+          };
+          const lastScrew = screwSpeedHistorical.length > 0 ? screwSpeedHistorical[screwSpeedHistorical.length - 1].value : null;
+
           return (
             <div className="mb-8">
               <h2 className="text-xl text-slate-900 mb-4">
                 Sensor Charts (Baseline Comparison)
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* 1. Schneckendrehzahl (ScrewSpeed_rpm) – same style as Temp_Spread */}
+                {/* 1. Schneckendrehzahl (ScrewSpeed_rpm) */}
                 <SimpleLiveChart
                   key="ScrewSpeed_rpm"
                   title="Schneckendrehzahl (ScrewSpeed_rpm)"
+                  legend="Bewertung ohne Baseline: 8–14 rpm 🟢, 5–18 rpm 🟠, außerhalb 🔴"
                   data={screwSpeedHistorical}
                   unit="rpm"
+                  lineColor={machineState === 'PRODUCTION' ? screwColor(lastScrew) : '#10b981'}
                   height={300}
                 />
 
@@ -827,8 +866,10 @@ export default function Dashboard() {
                 <SimpleLiveChart
                   key="Pressure_bar"
                   title="Schmelzedruck (Pressure_bar)"
+                  legend="Bewertung ohne Baseline: 350–400 bar 🟢, 300–450 bar 🟠, außerhalb 🔴"
                   data={pressureHistorical}
                   unit="bar"
+                  lineColor={machineState === 'PRODUCTION' ? pressureColor(lastPressure) : '#10b981'}
                   height={300}
                 />
 
@@ -837,15 +878,18 @@ export default function Dashboard() {
                   const zoneKey = `Temp_${zone}`;
                   const altKey = `temp_zone${index + 1}_c`;
                   const zoneHistorical = sourceRows.map((row: any, idx: number) => ({
-                    timestamp: row.TrendDate || new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
-                    value: parseFloat(row[zoneKey] ?? row[altKey]) ?? 0,
+                    timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
+                    value: num(row, zoneKey, altKey),
                   })).filter(validPoint);
+                  const lastZone = zoneHistorical.length > 0 ? zoneHistorical[zoneHistorical.length - 1].value : null;
                   return (
                     <SimpleLiveChart
                       key={zoneKey}
                       title={`Temperatur Zone ${index + 1} (${zoneKey})`}
+                      legend="Bewertung ohne Baseline: 170–180°C 🟢, 165–185°C 🟠, außerhalb 🔴"
                       data={zoneHistorical}
                       unit="°C"
+                      lineColor={machineState === 'PRODUCTION' ? tempColor(lastZone) : '#10b981'}
                       height={300}
                     />
                   );
@@ -855,12 +899,14 @@ export default function Dashboard() {
                 <SimpleLiveChart
                   key="Temp_Avg"
                   title="Durchschnittstemperatur (Temp_Avg)"
+                  legend="Bewertung ohne Baseline: 170–180°C 🟢, 165–185°C 🟠, außerhalb 🔴"
                   data={tempAvgHistorical}
                   unit="°C"
+                  lineColor={machineState === 'PRODUCTION' ? tempColor(lastTempAvg) : '#10b981'}
                   height={300}
                 />
 
-                {/* 8. Temperaturspreizung (Temp_Spread) – same component, threshold-based color */}
+                {/* 8. Temperaturspreizung (Temp_Spread) */}
                 <SimpleLiveChart
                   key="Temp_Spread"
                   title="Temperaturspreizung (Temp_Spread)"
