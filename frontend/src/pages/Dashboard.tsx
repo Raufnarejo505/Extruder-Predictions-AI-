@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [mssqlStatus, setMssqlStatus] = useState<any>(null);
   const [mssqlRows, setMssqlRows] = useState<any[]>([]);
   const [mssqlDerived, setMssqlDerived] = useState<any>(null);
+  const [sensorHistoryRows, setSensorHistoryRows] = useState<any[]>([]);
   const [machinesStats, setMachinesStats] = useState<any>(null);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [sensorsStats, setSensorsStats] = useState<any>(null);
@@ -70,7 +71,7 @@ export default function Dashboard() {
       
       try {
         // Fetch all data in parallel - matching backend endpoints
-        const [overviewResult, predictionsResult, aiResult, machinesStatsResult, sensorsStatsResult, predictionsStatsResult, mssqlStatusResult, mssqlLatestResult, mssqlDerivedResult, machineStatesResult, machinesResult, currentDashboardResult, materialChangesResult] = await Promise.all([
+        const [overviewResult, predictionsResult, aiResult, machinesStatsResult, sensorsStatsResult, predictionsStatsResult, mssqlStatusResult, mssqlLatestResult, mssqlDerivedResult, sensorHistoryResult, machineStatesResult, machinesResult, currentDashboardResult, materialChangesResult] = await Promise.all([
           safeApi.get('/dashboard/overview'),
           safeApi.get('/predictions?limit=30&sort=desc'),
           safeApi.get('/ai/status'),
@@ -80,6 +81,7 @@ export default function Dashboard() {
           safeApi.get('/dashboard/extruder/status'),
           safeApi.get('/dashboard/extruder/latest?limit=50'),
           safeApi.get('/dashboard/extruder/derived?window_minutes=30'),
+          safeApi.get('/dashboard/extruder/history?limit=500'),
           safeApi.get('/machine-state/states/current'),
           safeApi.get('/machines'), // Fetch machines list to match names with IDs
           safeApi.get(`/dashboard/current?material_id=${encodeURIComponent(selectedMaterial)}`), // Single source of truth for dashboard data
@@ -99,7 +101,7 @@ export default function Dashboard() {
         const hasFallback = overviewResult.fallback || predictionsResult.fallback || 
                            aiResult.fallback ||
                            machinesStatsResult.fallback || sensorsStatsResult.fallback || predictionsStatsResult.fallback ||
-                           mssqlStatusResult.fallback || mssqlLatestResult.fallback || mssqlDerivedResult.fallback ||
+                           mssqlStatusResult.fallback || mssqlLatestResult.fallback || mssqlDerivedResult.fallback || sensorHistoryResult.fallback ||
                            machineStatesResult.fallback || currentDashboardResult.fallback;
         setIsFallback(hasFallback);
         
@@ -115,6 +117,7 @@ export default function Dashboard() {
         if (mssqlStatusResult.data) setMssqlStatus(mssqlStatusResult.data);
         if ((mssqlLatestResult.data as any)?.rows) setMssqlRows(((mssqlLatestResult.data as any).rows as any[]) || []);
         if (mssqlDerivedResult.data) setMssqlDerived(mssqlDerivedResult.data);
+        if ((sensorHistoryResult.data as any)?.rows) setSensorHistoryRows(((sensorHistoryResult.data as any).rows as any[]) || []);
         if (machinesStatsResult.data) setMachinesStats(machinesStatsResult.data);
         if (sensorsStatsResult.data) setSensorsStats(sensorsStatsResult.data);
         if (predictionsStatsResult.data) setPredictionsStats(predictionsStatsResult.data);
@@ -755,12 +758,13 @@ export default function Dashboard() {
             currentDashboardData?.baseline_status === 'ready' ||
             currentDashboardData?.baseline_status === 'learning';
 
-          // Prefer rows from /dashboard/extruder/derived (time-windowed, same structure as MSSQL)
-          // and fall back to /dashboard/extruder/latest if needed.
+          // Prefer rows from sensor_data‑backed history, then derived MSSQL window, then raw MSSQL latest.
           const sourceRows: any[] =
-            (mssqlDerived as any)?.rows && Array.isArray((mssqlDerived as any).rows) && (mssqlDerived as any).rows.length > 0
-              ? (mssqlDerived as any).rows
-              : (mssqlRows || []);
+            (sensorHistoryRows && sensorHistoryRows.length > 0)
+              ? sensorHistoryRows
+              : ((mssqlDerived as any)?.rows && Array.isArray((mssqlDerived as any).rows) && (mssqlDerived as any).rows.length > 0
+                  ? (mssqlDerived as any).rows
+                  : (mssqlRows || []));
 
           // Prepare historical data for ScrewSpeed_rpm
           const screwSpeedHistorical = sourceRows.map((row: any, index: number) => ({

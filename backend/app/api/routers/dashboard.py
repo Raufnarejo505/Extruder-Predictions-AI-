@@ -342,6 +342,81 @@ async def get_extruder_latest_rows(
         raise HTTPException(status_code=502, detail="Failed to read MSSQL extruder data")
 
 
+@router.get("/extruder/history")
+async def get_extruder_history_from_sensor_data(
+    current_user: User = Depends(require_viewer),
+    limit: int = Query(500, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Return historical extruder sensor values from the sensor_data table.
+
+    Shape matches /dashboard/extruder/latest so the frontend can reuse the same chart logic:
+    [
+      {
+        "TrendDate": "...",
+        "ScrewSpeed_rpm": ...,
+        "Pressure_bar": ...,
+        "Temp_Zone1_C": ...,
+        "Temp_Zone2_C": ...,
+        "Temp_Zone3_C": ...,
+        "Temp_Zone4_C": ...
+      },
+      ...
+    ]
+    """
+    from sqlalchemy import select as sql_select
+    from app.models.sensor import Sensor
+    from app.models.sensor_data import SensorData
+    from app.services import sensor_data_service
+
+    # Find the extruder machine and its MSSQL snapshot sensor
+    machines = await session.scalars(
+        sql_select(Machine).where(Machine.name == "Extruder-SQL").limit(1)
+    )
+    machine = machines.first()
+    if not machine:
+        return {"rows": []}
+
+    sensors = await session.scalars(
+        sql_select(Sensor)
+        .where(
+            and_(
+                Sensor.machine_id == machine.id,
+                Sensor.name == "Extruder SQL Snapshot",
+            )
+        )
+        .limit(1)
+    )
+    sensor = sensors.first()
+    if not sensor:
+        return {"rows": []}
+
+    # Reuse recent_sensor_data helper to get latest rows for this sensor
+    rows: list[SensorData] = await sensor_data_service.recent_sensor_data(
+        session=session,
+        sensor_id=str(sensor.id),
+        limit=limit,
+    )
+
+    out: list[dict[str, Any]] = []
+    for sd in rows:
+        meta = sd.metadata_json or {}
+        out.append(
+            {
+                "TrendDate": sd.timestamp.isoformat() if sd.timestamp else None,
+                "ScrewSpeed_rpm": meta.get("screw_rpm"),
+                "Pressure_bar": meta.get("pressure_bar")
+                or (float(sd.value) if sd.value is not None else None),
+                "Temp_Zone1_C": meta.get("temp_zone1_c"),
+                "Temp_Zone2_C": meta.get("temp_zone2_c"),
+                "Temp_Zone3_C": meta.get("temp_zone3_c"),
+                "Temp_Zone4_C": meta.get("temp_zone4_c"),
+            }
+        )
+
+    return {"rows": out}
+
 @router.get("/extruder/status")
 async def get_extruder_status(
     current_user: User = Depends(require_viewer),

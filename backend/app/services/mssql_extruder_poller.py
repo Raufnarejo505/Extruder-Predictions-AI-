@@ -444,6 +444,34 @@ class MSSQLExtruderPoller:
                 wear_risk_score = 0.0
 
         async with AsyncSessionLocal() as session:
+            # 1) Persist raw sensor snapshot into sensor_data table for time‑series history
+            try:
+                from app.schemas.sensor_data import SensorDataIn as SensorDataInSchema
+                from app.services import sensor_data_service
+
+                # Store pressure as primary numeric value; keep full snapshot in metadata
+                sensor_payload = SensorDataInSchema(
+                    sensor_id=self._sensor_id,
+                    machine_id=self._machine_id,
+                    timestamp=ts,
+                    value=float(readings.get("pressure") or readings.get("rpm") or 0.0),
+                    status="normal",
+                    metadata={
+                        "source": "mssql",
+                        "screw_rpm": readings.get("rpm"),
+                        "pressure_bar": readings.get("pressure"),
+                        "temp_zone1_c": readings.get("temp_zone1"),
+                        "temp_zone2_c": readings.get("temp_zone2"),
+                        "temp_zone3_c": readings.get("temp_zone3"),
+                        "temp_zone4_c": readings.get("temp_zone4"),
+                    },
+                )
+                # Use bulk‑optimized ingestion to avoid blocking poller; ignore result
+                await sensor_data_service.ingest_sensor_data(session, sensor_payload)
+            except Exception as e:
+                logger.error(f"Failed to persist MSSQL snapshot into sensor_data: {e}", exc_info=True)
+
+            # 2) Persist AI prediction as before
             pred = PredictionCreate(
                 machine_id=self._machine_id,
                 sensor_id=self._sensor_id,
