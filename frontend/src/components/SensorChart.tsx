@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -65,40 +65,27 @@ export const SensorChart: React.FC<SensorChartProps> = ({
   setupDeviation,
   height = 300,
 }) => {
-  // Prepare chart data and split into history vs. live segment
+  // Prepare chart data: segment-based coloring (green in baseline, red out) for smooth animated line
   const chartData = useMemo(() => {
     if (!historicalData || historicalData.length === 0) {
       return [];
     }
 
-    const base = historicalData.map((point) => {
+    return historicalData.map((point) => {
       const timestampDate = typeof point.timestamp === 'string' ? new Date(point.timestamp) : point.timestamp;
+      const hasBaseline = baselineReady && !!greenBand;
+      const inBaseline =
+        hasBaseline &&
+        point.value >= greenBand!.min &&
+        point.value <= greenBand!.max;
       return {
         timestamp: typeof point.timestamp === 'string' ? point.timestamp : point.timestamp.toISOString(),
         value: point.value,
-        // Format timestamp for display
         timeLabel: timestampDate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
-        // Store timestamp as Date object for comparison
         timestampDate: timestampDate,
-      };
-    });
-
-    const total = base.length;
-    const liveWindow = 10;
-    const startLiveIndex = Math.max(0, total - liveWindow);
-
-    return base.map((point, index) => {
-      const inLiveWindow = index >= startLiveIndex;
-      const outOfBaseline =
-        baselineReady &&
-        !!greenBand &&
-        (point.value < greenBand.min || point.value > greenBand.max);
-
-      return {
-        ...point,
-        historyValue: point.value,
-        // Red live series only for the last N points AND outside the baseline band
-        liveValue: inLiveWindow && outOfBaseline ? point.value : null,
+        inBaseline: hasBaseline ? inBaseline : true,
+        greenSegment: hasBaseline ? (inBaseline ? point.value : null) : point.value,
+        redSegment: hasBaseline && !inBaseline ? point.value : null,
       };
     });
   }, [historicalData, baselineReady, greenBand]);
@@ -174,11 +161,18 @@ export const SensorChart: React.FC<SensorChartProps> = ({
   // Setup deviation badge text ("SETUP-ABWEICHUNG +20%")
   const setupDeviationBadge = useMemo(() => {
     if (setupDeviation === null || setupDeviation === undefined) return null;
-    if (Math.abs(setupDeviation) <= 10) return null;
     const rounded = Math.round(setupDeviation);
     const sign = rounded > 0 ? '+' : '';
     return `SETUP-ABWEICHUNG ${sign}${rounded}%`;
   }, [setupDeviation]);
+
+  // Flash LIVE value when it changes (for subtle update animation)
+  const [liveKey, setLiveKey] = useState(0);
+  useEffect(() => {
+    if (currentValue !== null && currentValue !== undefined) {
+      setLiveKey((k) => k + 1);
+    }
+  }, [currentValue]);
 
   // Chart domain calculation
   const allValues = [
@@ -265,10 +259,12 @@ export const SensorChart: React.FC<SensorChartProps> = ({
 
       {/* Status and Deviation Info */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4 text-sm bg-slate-50/50 rounded-lg p-3 border border-slate-200/50">
-        {/* Left: colored dot + exact German status text */}
+        {/* Left: colored dot + exact German status text (smooth transition, pulse on anomaly) */}
         <div className="flex items-center gap-3">
           <span
-            className="w-3 h-3 rounded-full"
+            className={`w-3 h-3 rounded-full transition-all duration-500 ${
+              severity === 2 ? 'animate-pulse' : ''
+            }`}
             style={{
               backgroundColor:
                 severity === 2 ? '#ef4444' :
@@ -277,7 +273,7 @@ export const SensorChart: React.FC<SensorChartProps> = ({
                 '#9ca3af',
             }}
           />
-          <span className="font-semibold text-slate-800">
+          <span className="font-semibold text-slate-800 transition-all duration-300">
             {statusText}
           </span>
         </div>
@@ -297,10 +293,13 @@ export const SensorChart: React.FC<SensorChartProps> = ({
         )}
         {currentValue !== null && currentValue !== undefined && (
           <div className="flex items-center gap-3">
-            <span className="text-xs font-bold uppercase tracking-wide px-3 py-1 rounded-full bg-emerald-600 text-white shadow-sm">
+            <span className="text-xs font-bold uppercase tracking-wide px-3 py-1 rounded-full bg-emerald-600 text-white shadow-sm transition-all duration-300">
               LIVE
             </span>
-            <span className="font-extrabold px-3 py-1 rounded-md border border-emerald-600 text-emerald-700 bg-emerald-50">
+            <span
+              key={liveKey}
+              className="font-extrabold px-3 py-1 rounded-md border border-emerald-600 text-emerald-700 bg-emerald-50 transition-all duration-300"
+            >
               {currentValue.toLocaleString('de-DE', {
                 minimumFractionDigits: 1,
                 maximumFractionDigits: 1,
@@ -405,23 +404,29 @@ export const SensorChart: React.FC<SensorChartProps> = ({
               />
             ))}
 
-            {/* History curve (green) */}
+            {/* Green segment (in baseline) – smooth line with animation */}
             <Line
               type="monotone"
-              dataKey="historyValue"
+              dataKey="greenSegment"
               stroke="#10b981"
               strokeWidth={2.5}
               dot={false}
-              isAnimationActive={false}
+              connectNulls
+              isAnimationActive={true}
+              animationDuration={700}
+              animationEasing="ease-out"
             />
-            {/* Live out-of-baseline segment (red spike) */}
+            {/* Red segment (out of baseline) – smooth transition, dots on peaks */}
             <Line
               type="monotone"
-              dataKey="liveValue"
+              dataKey="redSegment"
               stroke="#ef4444"
               strokeWidth={2.5}
               dot={{ r: 3, stroke: '#ef4444', fill: '#ef4444' }}
-              isAnimationActive={false}
+              connectNulls
+              isAnimationActive={true}
+              animationDuration={700}
+              animationEasing="ease-out"
             />
           </LineChart>
         </ResponsiveContainer>
@@ -442,11 +447,18 @@ export const SensorChart: React.FC<SensorChartProps> = ({
           </div>
           {setupDeviationBadge && (
             <div className="pt-1">
-              <span className="inline-flex items-center px-3 py-1 rounded-full border border-amber-500 bg-amber-50 text-amber-700 text-[11px] font-extrabold tracking-wide uppercase">
+              <span className="inline-flex items-center px-3 py-1 rounded-full border border-amber-500/60 bg-amber-50 text-amber-700 text-[11px] font-extrabold tracking-wide uppercase transition-all duration-300">
                 {setupDeviationBadge}
               </span>
             </div>
           )}
+        </div>
+      )}
+      {!showBaseline && (
+        <div className="mt-5 pt-4 border-t border-slate-200 text-xs text-slate-500">
+          <p className="font-medium">
+            Keine Baseline verfügbar{baselineMaterial ? ` für Material ${baselineMaterial}` : ''}
+          </p>
         </div>
       )}
     </div>
