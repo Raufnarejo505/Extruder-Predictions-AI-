@@ -746,12 +746,21 @@ export default function Dashboard() {
 
         {(() => {
           // Prefer rows from sensor_data‑backed history, then derived MSSQL window, then raw MSSQL latest.
-          const sourceRows: any[] =
-            (sensorHistoryRows && sensorHistoryRows.length > 0)
-              ? sensorHistoryRows
-              : ((mssqlDerived as any)?.rows && Array.isArray((mssqlDerived as any).rows) && (mssqlDerived as any).rows.length > 0
-                  ? (mssqlDerived as any).rows
-                  : (mssqlRows || []));
+          const sourceRows: any[] = (() => {
+            const raw =
+              (sensorHistoryRows && sensorHistoryRows.length > 0)
+                ? sensorHistoryRows
+                : ((mssqlDerived as any)?.rows && Array.isArray((mssqlDerived as any).rows) && (mssqlDerived as any).rows.length > 0
+                    ? (mssqlDerived as any).rows
+                    : (mssqlRows || []));
+            // Sort by time (oldest first) so charts display left-to-right chronologically
+            const getTime = (r: any) => {
+              const t = r?.TrendDate ?? r?.trend_date;
+              if (!t) return 0;
+              return new Date(t).getTime();
+            };
+            return [...raw].sort((a, b) => getTime(a) - getTime(b));
+          })();
 
           // Prepare historical data: keep all valid numbers (include 0) so charts display like Temp_Spread
           const validPoint = (d: { value: number }) =>

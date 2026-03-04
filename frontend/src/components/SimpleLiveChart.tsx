@@ -52,6 +52,23 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
     });
   }, [data]);
 
+  // Y-axis domain: use data range with minimum span so near-constant data doesn't look like a flat line at the edge
+  const yDomain = React.useMemo((): [number, number] => {
+    const values = chartData.map((d) => Number(d.value)).filter((v) => typeof v === 'number' && !isNaN(v));
+    if (values.length === 0) return [0, 100];
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const range = maxVal - minVal;
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const minRange = Math.max(mean * 0.02, 1, range * 1.1);
+    const half = minRange / 2;
+    if (range < minRange * 0.5) {
+      return [mean - half, mean + half];
+    }
+    const padding = range * 0.05 || 1;
+    return [minVal - padding, maxVal + padding];
+  }, [chartData]);
+
   return (
     <div className="bg-white/95 backdrop-blur-sm border-2 border-slate-200/80 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
       <div className="mb-5">
@@ -77,6 +94,7 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
               interval="preserveStartEnd"
             />
             <YAxis
+              domain={yDomain}
               tick={{ fill: '#64748b', fontSize: 11 }}
               label={{
                 value: unit,
