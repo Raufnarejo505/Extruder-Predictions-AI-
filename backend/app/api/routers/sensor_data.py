@@ -2,7 +2,7 @@ from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, HTTPException
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,16 +17,36 @@ router = APIRouter(prefix="/sensor-data", tags=["sensor_data"])
 
 @router.post("", response_model=SensorDataOut, status_code=status.HTTP_201_CREATED)
 async def ingest_sensor_data(payload: SensorDataIn, session: AsyncSession = Depends(get_session)):
-    sensor_data = await sensor_data_service.ingest_sensor_data(session, payload)
+    """
+    Ingest a single sensor reading.
+
+    For data consistency and to avoid FK violations we always:
+    - Verify that the sensor exists
+    - Derive machine_id from the sensor's machine_id (ignore arbitrary machine_id in payload)
+    """
+    # Ensure sensor exists
     sensor = await sensor_service.get_sensor(session, payload.sensor_id)
-    if sensor:
-        await alarm_service.auto_alarm_from_sensor_value(
-            session=session,
-            sensor=sensor,
-            machine_id=payload.machine_id,
-            value=payload.value,
-            timestamp=payload.timestamp,
-        )
+    if not sensor:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+
+    # Ensure sensor is linked to a machine and enforce that as the machine_id
+    if not sensor.machine_id:
+        raise HTTPException(status_code=400, detail="Sensor is not associated with a machine")
+
+    # Override any incoming machine_id with the canonical one from the sensor record
+    payload.machine_id = sensor.machine_id
+
+    # Persist sensor data
+    sensor_data = await sensor_data_service.ingest_sensor_data(session, payload)
+
+    # Auto‑alarm based on configured thresholds
+    await alarm_service.auto_alarm_from_sensor_value(
+        session=session,
+        sensor=sensor,
+        machine_id=payload.machine_id,
+        value=payload.value,
+        timestamp=payload.timestamp,
+    )
     return sensor_data
 
 
