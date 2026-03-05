@@ -39,6 +39,7 @@ export default function Dashboard() {
   const [showCreateProfileModal, setShowCreateProfileModal] = useState(false);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [createProfileError, setCreateProfileError] = useState<string | null>(null);
+  const [chartTimeframe, setChartTimeframe] = useState<'1h' | '1d' | '1w' | '1m'>('1h');
   
   const backendStatus = useBackendStore((state) => state.status);
   const mountedRef = useRef(true);
@@ -827,6 +828,23 @@ export default function Dashboard() {
             else if (latestSpread > 5) tempSpreadColor = '#f59e0b'; // orange
           }
 
+          // Timeframe filter for charts (1h, 1d, 1w, 1m)
+          const now = new Date();
+          const timeframeMs =
+            chartTimeframe === '1h'
+              ? 60 * 60 * 1000
+              : chartTimeframe === '1d'
+              ? 24 * 60 * 60 * 1000
+              : chartTimeframe === '1w'
+              ? 7 * 24 * 60 * 60 * 1000
+              : 30 * 24 * 60 * 60 * 1000; // 1m ~ 30 days
+
+          const withinTimeframe = (ts: string | Date | undefined | null) => {
+            if (!ts) return false;
+            const d = typeof ts === 'string' ? new Date(ts) : ts;
+            return now.getTime() - d.getTime() <= timeframeMs;
+          };
+
           // Line color for temperature (zone/avg): 170–180 °C 🟢, 180–185 °C 🟠, >185 °C 🔴
           const tempColor = (v: number | null) => {
             if (v === null || v === undefined) return '#94a3b8';
@@ -859,16 +877,33 @@ export default function Dashboard() {
 
           return (
             <div className="mb-8">
-              <h2 className="text-xl text-slate-900 mb-4">
-                Sensor Charts (Baseline Comparison)
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl text-slate-900">
+                  Sensor Charts (Baseline Comparison)
+                </h2>
+                <div className="flex gap-2 text-xs">
+                  {['1h', '1d', '1w', '1m'].map((tf) => (
+                    <button
+                      key={tf}
+                      onClick={() => setChartTimeframe(tf as '1h' | '1d' | '1w' | '1m')}
+                      className={`px-2 py-1 rounded-full border ${
+                        chartTimeframe === tf
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {tf}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* 1. Schneckendrehzahl (ScrewSpeed_rpm) */}
                 <SimpleLiveChart
                   key="ScrewSpeed_rpm"
                   title="Schneckendrehzahl (ScrewSpeed_rpm)"
                   legend="Bewertung ohne Baseline: 8–14 rpm 🟢, 14–18 rpm 🟠, >18 rpm 🔴"
-                  data={screwSpeedHistorical}
+                  data={screwSpeedHistorical.filter((p) => withinTimeframe(p.timestamp))}
                   unit="rpm"
                   lineColor={machineState === 'PRODUCTION' ? screwColor(lastScrew) : '#10b981'}
                   height={300}
@@ -879,7 +914,7 @@ export default function Dashboard() {
                   key="Pressure_bar"
                   title="Schmelzedruck (Pressure_bar)"
                   legend="Bewertung ohne Baseline: 350–400 bar 🟢, 400–450 bar 🟠, >450 bar 🔴"
-                  data={pressureHistorical}
+                  data={pressureHistorical.filter((p) => withinTimeframe(p.timestamp))}
                   unit="bar"
                   lineColor={machineState === 'PRODUCTION' ? pressureColor(lastPressure) : '#10b981'}
                   height={300}
@@ -889,10 +924,13 @@ export default function Dashboard() {
                 {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => {
                   const zoneKey = `Temp_${zone}`;
                   const altKey = `temp_zone${index + 1}_c`;
-                  const zoneHistorical = sourceRows.map((row: any, idx: number) => ({
-                    timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
-                    value: num(row, zoneKey, altKey),
-                  })).filter(validPoint);
+                  const zoneHistorical = sourceRows
+                    .map((row: any, idx: number) => ({
+                      timestamp: row.TrendDate ?? row.trend_date ?? new Date(Date.now() - ((sourceRows.length || 0) - idx) * 60000),
+                      value: num(row, zoneKey, altKey),
+                    }))
+                    .filter(validPoint)
+                    .filter((p) => withinTimeframe(p.timestamp));
                   const lastZone = zoneHistorical.length > 0 ? zoneHistorical[zoneHistorical.length - 1].value : null;
                   return (
                     <SimpleLiveChart
@@ -912,7 +950,7 @@ export default function Dashboard() {
                   key="Temp_Avg"
                   title="Durchschnittstemperatur (Temp_Avg)"
                   legend="Bewertung ohne Baseline: 170–180°C 🟢, 180–185°C 🟠, >185°C 🔴"
-                  data={tempAvgHistorical}
+                  data={tempAvgHistorical.filter((p) => withinTimeframe(p.timestamp))}
                   unit="°C"
                   lineColor={machineState === 'PRODUCTION' ? tempColor(lastTempAvg) : '#10b981'}
                   height={300}
@@ -923,7 +961,7 @@ export default function Dashboard() {
                   key="Temp_Spread"
                   title="Temperaturspreizung (Temp_Spread)"
                   legend="Bewertung ohne Baseline: ≤5°C 🟢, 5–8°C 🟠, >8°C 🔴"
-                  data={tempSpreadHistorical}
+                  data={tempSpreadHistorical.filter((p) => withinTimeframe(p.timestamp))}
                   unit="°C"
                   lineColor={tempSpreadColor}
                   height={300}
