@@ -827,30 +827,33 @@ export default function Dashboard() {
             else if (latestSpread > 5) tempSpreadColor = '#f59e0b'; // orange
           }
 
-          // Line color for temperature (zone/avg): 170–180 °C 🟢, 165–185 °C 🟠, outside 🔴
+          // Line color for temperature (zone/avg): 170–180 °C 🟢, 180–185 °C 🟠, >185 °C 🔴
           const tempColor = (v: number | null) => {
             if (v === null || v === undefined) return '#94a3b8';
             if (v >= 170 && v <= 180) return '#10b981';
-            if (v >= 165 && v <= 185) return '#f59e0b';
-            return '#ef4444';
+            if (v > 180 && v <= 185) return '#f59e0b';
+            if (v > 185) return '#ef4444';
+            return '#94a3b8';
           };
           const lastTempAvg = tempAvgHistorical.length > 0 ? tempAvgHistorical[tempAvgHistorical.length - 1].value : null;
 
-          // Line color for pressure: 350–400 bar 🟢, 300–450 bar 🟠, outside 🔴
+          // Line color for pressure: 350–400 bar 🟢, 400–450 bar 🟠, >450 bar 🔴
           const pressureColor = (v: number | null) => {
             if (v === null || v === undefined) return '#94a3b8';
             if (v >= 350 && v <= 400) return '#10b981';
-            if (v >= 300 && v <= 450) return '#f59e0b';
-            return '#ef4444';
+            if (v > 400 && v <= 450) return '#f59e0b';
+            if (v > 450) return '#ef4444';
+            return '#94a3b8';
           };
           const lastPressure = pressureHistorical.length > 0 ? pressureHistorical[pressureHistorical.length - 1].value : null;
 
-          // Line color for screw speed: 8–14 rpm 🟢, 5–18 rpm 🟠, outside 🔴
+          // Line color for screw speed: 8–14 rpm 🟢, 14–18 rpm 🟠, >18 rpm 🔴
           const screwColor = (v: number | null) => {
             if (v === null || v === undefined) return '#94a3b8';
             if (v >= 8 && v <= 14) return '#10b981';
-            if (v >= 5 && v <= 18) return '#f59e0b';
-            return '#ef4444';
+            if (v > 14 && v <= 18) return '#f59e0b';
+            if (v > 18) return '#ef4444';
+            return '#94a3b8';
           };
           const lastScrew = screwSpeedHistorical.length > 0 ? screwSpeedHistorical[screwSpeedHistorical.length - 1].value : null;
 
@@ -864,7 +867,7 @@ export default function Dashboard() {
                 <SimpleLiveChart
                   key="ScrewSpeed_rpm"
                   title="Schneckendrehzahl (ScrewSpeed_rpm)"
-                  legend="Bewertung ohne Baseline: 8–14 rpm 🟢, 5–18 rpm 🟠, außerhalb 🔴"
+                  legend="Bewertung ohne Baseline: 8–14 rpm 🟢, 14–18 rpm 🟠, >18 rpm 🔴"
                   data={screwSpeedHistorical}
                   unit="rpm"
                   lineColor={machineState === 'PRODUCTION' ? screwColor(lastScrew) : '#10b981'}
@@ -875,7 +878,7 @@ export default function Dashboard() {
                 <SimpleLiveChart
                   key="Pressure_bar"
                   title="Schmelzedruck (Pressure_bar)"
-                  legend="Bewertung ohne Baseline: 350–400 bar 🟢, 300–450 bar 🟠, außerhalb 🔴"
+                  legend="Bewertung ohne Baseline: 350–400 bar 🟢, 400–450 bar 🟠, >450 bar 🔴"
                   data={pressureHistorical}
                   unit="bar"
                   lineColor={machineState === 'PRODUCTION' ? pressureColor(lastPressure) : '#10b981'}
@@ -895,7 +898,7 @@ export default function Dashboard() {
                     <SimpleLiveChart
                       key={zoneKey}
                       title={`Temperatur Zone ${index + 1} (${zoneKey})`}
-                      legend="Bewertung ohne Baseline: 170–180°C 🟢, 165–185°C 🟠, außerhalb 🔴"
+                      legend="Bewertung ohne Baseline: 170–180°C 🟢, 180–185°C 🟠, >185°C 🔴"
                       data={zoneHistorical}
                       unit="°C"
                       lineColor={machineState === 'PRODUCTION' ? tempColor(lastZone) : '#10b981'}
@@ -908,7 +911,7 @@ export default function Dashboard() {
                 <SimpleLiveChart
                   key="Temp_Avg"
                   title="Durchschnittstemperatur (Temp_Avg)"
-                  legend="Bewertung ohne Baseline: 170–180°C 🟢, 165–185°C 🟠, außerhalb 🔴"
+                  legend="Bewertung ohne Baseline: 170–180°C 🟢, 180–185°C 🟠, >185°C 🔴"
                   data={tempAvgHistorical}
                   unit="°C"
                   lineColor={machineState === 'PRODUCTION' ? tempColor(lastTempAvg) : '#10b981'}
