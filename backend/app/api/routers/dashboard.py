@@ -160,7 +160,7 @@ async def _get_latest_extruder_snapshot_row(session: AsyncSession) -> tuple[dict
         return None, None
 
     meta = sd.metadata_json or {}
-    row = {
+    row: dict[str, Any] = {
         "TrendDate": sd.timestamp.isoformat() if sd.timestamp else None,
         "ScrewSpeed_rpm": meta.get("screw_rpm"),
         "Pressure_bar": meta.get("pressure_bar") or (float(sd.value) if sd.value is not None else None),
@@ -169,6 +169,11 @@ async def _get_latest_extruder_snapshot_row(session: AsyncSession) -> tuple[dict
         "Temp_Zone3_C": meta.get("temp_zone3_c"),
         "Temp_Zone4_C": meta.get("temp_zone4_c"),
     }
+    # Also promote any persisted Val_* channels from metadata (stored in lower-case like "val_11")
+    # so dynamic temperature detection can see additional tool temperatures.
+    for k, v in meta.items():
+        if isinstance(k, str) and k.startswith("val_"):
+            row[k.upper()] = v  # e.g. "val_11" -> "VAL_11"
     return row, sd.timestamp
 
 async def _ensure_extruder_machine_and_sensor(session: AsyncSession) -> Tuple[UUID, UUID]:
@@ -454,16 +459,11 @@ async def get_extruder_latest_rows(
         import pymssql
 
         table_sql = f"[{schema}].[{table}]"
-        # MSSQL 2000 does not support parentheses around TOP value
+        # MSSQL 2000 does not support parentheses around TOP value.
+        # Use SELECT * so we can expose ALL Val_* channels (for dynamic temperature detection),
+        # then derive canonical fields (ScrewSpeed_rpm, Pressure_bar, Temp_Zone*_C) from known columns.
         query = (
-            f"SELECT TOP {int(limit)} "
-            f"TrendDate, "
-            f"Val_4 AS ScrewSpeed_rpm, "
-            f"Val_6 AS Pressure_bar, "
-            f"Val_7 AS Temp_Zone1_C, "
-            f"Val_8 AS Temp_Zone2_C, "
-            f"Val_9 AS Temp_Zone3_C, "
-            f"Val_10 AS Temp_Zone4_C "
+            f"SELECT TOP {int(limit)} * "
             f"FROM {table_sql} "
             f"ORDER BY TrendDate DESC"
         )
@@ -496,7 +496,7 @@ async def get_extruder_latest_rows(
 
             cur.execute(query)
             rows = cur.fetchall() or []
-            out = []
+            out: list[dict[str, Any]] = []
             for r in rows:
                 td = r.get("TrendDate")
                 if isinstance(td, datetime):
@@ -506,17 +506,24 @@ async def get_extruder_latest_rows(
                 else:
                     trend_date = str(td)
 
-                out.append(
-                    {
-                        "TrendDate": trend_date,
-                        "ScrewSpeed_rpm": r.get("ScrewSpeed_rpm"),
-                        "Pressure_bar": r.get("Pressure_bar"),
-                        "Temp_Zone1_C": r.get("Temp_Zone1_C"),
-                        "Temp_Zone2_C": r.get("Temp_Zone2_C"),
-                        "Temp_Zone3_C": r.get("Temp_Zone3_C"),
-                        "Temp_Zone4_C": r.get("Temp_Zone4_C"),
-                    }
-                )
+                # Canonical fields (fallback to Val_* if aliases do not exist)
+                row: dict[str, Any] = {
+                    "TrendDate": trend_date,
+                    "ScrewSpeed_rpm": r.get("ScrewSpeed_rpm") or r.get("Val_4"),
+                    "Pressure_bar": r.get("Pressure_bar") or r.get("Val_6"),
+                    "Temp_Zone1_C": r.get("Temp_Zone1_C") or r.get("Val_7"),
+                    "Temp_Zone2_C": r.get("Temp_Zone2_C") or r.get("Val_8"),
+                    "Temp_Zone3_C": r.get("Temp_Zone3_C") or r.get("Val_9"),
+                    "Temp_Zone4_C": r.get("Temp_Zone4_C") or r.get("Val_10"),
+                }
+
+                # Also forward all raw Val_* channels so dynamic temperature detection
+                # (Main/Tool groups) can see additional temperature sensors.
+                for k, v in r.items():
+                    if isinstance(k, str) and k.startswith("Val_"):
+                        row[k] = v
+
+                out.append(row)
 
             out.reverse()
             return {"rows": out}
@@ -559,6 +566,15 @@ async def get_extruder_latest_rows(
                     except Exception:
                         continue
                     idempotency_key = f"{sensor_id}_{ts.isoformat()}"
+
+                    # Persist all Val_* channels into metadata alongside canonical fields,
+                    # so temperature grouping endpoints can read additional tool temperatures
+                    # from sensor_data.
+                    extra_vals: dict[str, Any] = {}
+                    for k, v in r.items():
+                        if isinstance(k, str) and k.startswith("Val_"):
+                            extra_vals[k.lower()] = v
+
                     payload = SensorDataInSchema(
                         sensor_id=sensor_id,
                         machine_id=machine_id,
@@ -573,6 +589,7 @@ async def get_extruder_latest_rows(
                             "temp_zone2_c": r.get("Temp_Zone2_C"),
                             "temp_zone3_c": r.get("Temp_Zone3_C"),
                             "temp_zone4_c": r.get("Temp_Zone4_C"),
+                            **extra_vals,
                         },
                         idempotency_key=idempotency_key,
                     )
