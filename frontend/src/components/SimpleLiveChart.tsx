@@ -27,9 +27,7 @@ export interface SimpleLiveChartProps {
   lineColor?: string;
   /** Chart height in pixels */
   height?: number;
-  /** Optional custom Y-axis domain, e.g. [0, 1] for normalized scales */
-  yDomain?: [number, number];
-  /** Optional custom Y-axis tick positions */
+  /** Optional custom Y-axis tick positions (e.g. [0,1,2,...,10] for Temp_Spread) */
   yTicks?: number[];
 }
 
@@ -45,7 +43,6 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
   unit,
   lineColor = '#10b981',
   height = 300,
-  yDomain,
   yTicks,
 }) => {
   const chartData = React.useMemo(() => {
@@ -58,9 +55,8 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
     });
   }, [data]);
 
-  // Y-axis domain: use provided domain if given, otherwise compute from data
-  const computedYDomain = React.useMemo((): [number, number] => {
-    if (yDomain) return yDomain;
+  // Y-axis domain: use data range with minimum span so near-constant data doesn't look like a flat line at the edge
+  const yDomain = React.useMemo((): [number, number] => {
     const values = chartData.map((d) => Number(d.value)).filter((v) => typeof v === 'number' && !isNaN(v));
     if (values.length === 0) return [0, 100];
     const minVal = Math.min(...values);
@@ -74,9 +70,7 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
     }
     const padding = range * 0.05 || 1;
     return [minVal - padding, maxVal + padding];
-  }, [chartData, yDomain]);
-
-  const isFractionalScale = computedYDomain[1] <= 1.01;
+  }, [chartData]);
 
   return (
     <div className="bg-white/95 backdrop-blur-sm border-2 border-slate-200/80 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
@@ -103,12 +97,10 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
               interval="preserveStartEnd"
             />
             <YAxis
-              domain={computedYDomain}
+              domain={yDomain}
               ticks={yTicks}
               tick={{ fill: '#64748b', fontSize: 11 }}
-              tickFormatter={(value: number) =>
-                isFractionalScale ? Number(value).toFixed(2) : Number(value).toFixed(0)
-              }
+              tickFormatter={(value: number) => Number(value).toFixed(0)}
               label={{
                 value: unit,
                 angle: -90,
