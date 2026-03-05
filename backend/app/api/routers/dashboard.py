@@ -992,7 +992,122 @@ async def get_extruder_derived_kpis(
 
     # Step 2: Baseline calculation per sensor, operating-point aware
     sensor_keys = ["ScrewSpeed_rpm", "Pressure_bar", "Temp_Zone1_C", "Temp_Zone2_C", "Temp_Zone3_C", "Temp_Zone4_C"]
-    
+
+    # --- Dynamic Temperature Overview (for all machine states) ---
+    def build_temperature_overview(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Detect temperature channels dynamically (80–300°C), group into logical zones,
+        and compute per-group average and spread.
+
+        Group A – Main Extruder: up to 5 channels with tightest value cluster
+        Group B – Adapter/Tool: remaining channels after Group A
+        Group C – Co-Extruder: reserved for a third cluster (not yet used, will be added when more channels exist)
+        """
+        if not rows:
+            return {
+                "status": "no_signals",
+                "groups": {},
+            }
+
+        latest = rows[-1]
+        channels: list[dict[str, Any]] = []
+
+        for key, raw_val in latest.items():
+            if key in ("TrendDate",):
+                continue
+            # Keep known non-temperature metrics out of detection
+            if key in ("ScrewSpeed_rpm", "Pressure_bar"):
+                continue
+            val = as_float(raw_val)
+            if val is None:
+                continue
+            # Detection purely by value range (80–300°C)
+            if 80.0 <= val <= 300.0:
+                channels.append({"key": key, "value": val})
+
+        if not channels:
+            return {
+                "status": "no_signals",
+                "groups": {},
+            }
+
+        # Sort channels by current value
+        channels_sorted = sorted(channels, key=lambda c: c["value"])
+
+        # Helper to compute group stats
+        def group_stats(chs: list[dict[str, Any]]) -> dict[str, Any]:
+            vals = [c["value"] for c in chs]
+            if not vals:
+                return {"avg": None, "spread": None}
+            return {
+                "avg": round(statistics.mean(vals), 2),
+                "spread": round(max(vals) - min(vals), 2),
+            }
+
+        # Select up to 5 channels with the tightest clustering for Main Extruder
+        if len(channels_sorted) <= 5:
+            main_channels = channels_sorted
+        else:
+            window_size = 5
+            best_start = 0
+            best_spread = float("inf")
+            for start in range(0, len(channels_sorted) - window_size + 1):
+                window = channels_sorted[start : start + window_size]
+                spread = window[-1]["value"] - window[0]["value"]
+                if spread < best_spread:
+                    best_spread = spread
+                    best_start = start
+            main_channels = channels_sorted[best_start : best_start + window_size]
+
+        main_keys = {c["key"] for c in main_channels}
+        tool_channels = [c for c in channels_sorted if c["key"] not in main_keys]
+
+        # Assign labels within each group
+        main_group_channels = []
+        for idx, ch in enumerate(main_channels, start=1):
+            main_group_channels.append(
+                {
+                    "key": ch["key"],
+                    "label": f"Zone {idx}",
+                    "value": ch["value"],
+                }
+            )
+
+        tool_group_channels = []
+        for idx, ch in enumerate(tool_channels, start=1):
+            tool_group_channels.append(
+                {
+                    "key": ch["key"],
+                    "label": f"Tool {idx}",
+                    "value": ch["value"],
+                }
+            )
+
+        groups: dict[str, Any] = {}
+
+        if main_group_channels:
+            groups["main"] = {
+                "name": "Main Extruder",
+                "avg": group_stats(main_group_channels)["avg"],
+                "spread": group_stats(main_group_channels)["spread"],
+                "channels": main_group_channels,
+            }
+
+        if tool_group_channels:
+            groups["tool"] = {
+                "name": "Adapter / Tool",
+                "avg": group_stats(tool_group_channels)["avg"],
+                "spread": group_stats(tool_group_channels)["spread"],
+                "channels": tool_group_channels,
+            }
+
+        # Co-Extruder (optional third cluster) can be added later when additional channels are present
+
+        return {
+            "status": "ok",
+            "groups": groups,
+        }
+
     # Calculate Temp_Avg and Temp_Spread for ALL states (even when not in PRODUCTION)
     temp_keys = ["Temp_Zone1_C", "Temp_Zone2_C", "Temp_Zone3_C", "Temp_Zone4_C"]
     for r in rows:
@@ -1003,7 +1118,7 @@ async def get_extruder_derived_kpis(
         else:
             r["Temp_Avg"] = None
             r["Temp_Spread"] = None
-    
+
     # Get current Temp_Avg and Temp_Spread from latest row
     current_temp_avg = None
     current_temp_spread = None
@@ -1043,6 +1158,7 @@ async def get_extruder_derived_kpis(
                 "Temp_Avg": {"current": current_temp_avg},  # Show calculated value
                 "Temp_Spread": {"current": current_temp_spread},  # Show calculated value
                 "explanations": neutral_explanations,  # Neutral status text
+                "temperature_overview": build_temperature_overview(rows),
             },
             "risk": {"overall": "unknown", "sensors": {}},  # No risk scores when not in PRODUCTION
             "risk_score": None,  # N/A when not in PRODUCTION
@@ -1106,6 +1222,8 @@ async def get_extruder_derived_kpis(
         "mean": round(statistics.mean(all_temp_spread), 3) if all_temp_spread else None,
         "std": round(statistics.stdev(all_temp_spread), 3) if len(all_temp_spread) > 1 else None,
     }
+    # Dynamic temperature overview (groups & channels)
+    derived["temperature_overview"] = build_temperature_overview(rows)
     # Stability indicators: % of points within normal range
     stability = {}
     for key in sensor_keys:

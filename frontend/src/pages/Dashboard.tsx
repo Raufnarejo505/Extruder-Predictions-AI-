@@ -699,50 +699,112 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Sensor Charts Section - UI Contract Implementation */}
-        {/* Moved below Temperaturzonen (Zone 1–4) as per UI requirement */}
-
+        {/* Dynamic Temperature Overview (replaces fixed 4-zone block) */}
         <div className="mb-8">
           <h2 className="text-xl text-slate-900 mb-4">
-            Temperaturzonen (Zone 1–4)
+            Temperature Overview
           </h2>
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            {['Zone1_C', 'Zone2_C', 'Zone3_C', 'Zone4_C'].map((zone, index) => (
-              <div key={zone} className="bg-white/95 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-[1.02]">
-                <div className="text-sm text-slate-600 mb-2">Zone {index + 1}</div>
-                <div className="text-5xl mb-3">
-                  <span className={
-                    machineState === 'PRODUCTION' ? 
-                    (mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'red' ? 'text-rose-600' :
-                     mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'yellow' ? 'text-amber-600' :
-                     mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'green' ? 'text-emerald-600' :
-                     'text-slate-400') :
-                    'text-slate-400'  // Neutral color when not in production
-                  }>
-                    {mssqlRows?.[0]?.[`Temp_${zone}`] ? parseFloat(mssqlRows[0][`Temp_${zone}`]).toFixed(1) : '--'}
-                  </span>
-                  <span className="text-3xl text-slate-500 ml-2">°C</span>
+          {mssqlDerived?.derived?.temperature_overview?.status === 'no_signals' && (
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 border border-dashed border-slate-300 text-sm text-slate-500">
+              No Temperature Signals Detected (no channels in 80–300°C range).
+            </div>
+          )}
+          {mssqlDerived?.derived?.temperature_overview?.status !== 'no_signals' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Sub-panel 1: Main Extruder */}
+              {mssqlDerived?.derived?.temperature_overview?.groups?.main && (
+                <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-slate-800">Main Extruder</div>
+                    <div className="text-xs text-slate-500">
+                      Avg: <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.main.avg?.toFixed(1) ?? '--'}°C
+                      </span>{' '}
+                      · Spread:{' '}
+                      <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.main.spread?.toFixed(1) ?? '--'}°C
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {mssqlDerived.derived.temperature_overview.groups.main.channels.map((ch: any) => (
+                      <div key={ch.key} className="flex items-baseline justify-between">
+                        <div className="text-xs text-slate-600">{ch.label}</div>
+                        <div className="text-lg">
+                          <span className="font-semibold text-slate-900">
+                            {typeof ch.value === 'number' ? ch.value.toFixed(1) : '--'}
+                          </span>
+                          <span className="text-xs text-slate-500 ml-1">°C</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-500 mb-1">
-                  Berechnung: Direkte Messung von Temperatursensor Zone {index + 1}
+              )}
+
+              {/* Sub-panel 2: Adapter / Tool */}
+              {mssqlDerived?.derived?.temperature_overview?.groups?.tool && (
+                <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-slate-800">Adapter / Tool</div>
+                    <div className="text-xs text-slate-500">
+                      Avg: <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.tool.avg?.toFixed(1) ?? '--'}°C
+                      </span>{' '}
+                      · Spread:{' '}
+                      <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.tool.spread?.toFixed(1) ?? '--'}°C
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {mssqlDerived.derived.temperature_overview.groups.tool.channels.map((ch: any) => (
+                      <div key={ch.key} className="flex items-baseline justify-between">
+                        <div className="text-xs text-slate-600">{ch.label}</div>
+                        <div className="text-lg">
+                          <span className="font-semibold text-slate-900">
+                            {typeof ch.value === 'number' ? ch.value.toFixed(1) : '--'}
+                          </span>
+                          <span className="text-xs text-slate-500 ml-1">°C</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-600">
-                  {machineState === 'PRODUCTION' ? (
-                    <>
-                      {mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'green' && 
-                        "🟢 Temperaturzone im materialgerechten Bereich. Saubere Erwärmung ohne Auffälligkeiten."}
-                      {mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'yellow' && 
-                        "🟠 Temperaturabweichung festgestellt. Mögliche Änderungen im Heizverhalten oder Materialfluss."}
-                      {mssqlDerived?.risk?.sensors[`Temp_${zone}`] === 'red' && 
-                        "🔴 Kritische Temperaturabweichung. Risiko für unvollständige Plastifizierung, Materialabbau oder Qualitätsprobleme."}
-                    </>
-                  ) : (
-                    `⏸️ Maschine im ${machineState} Zustand - keine Prozessbewertung`
-                  )}
+              )}
+
+              {/* Sub-panel 3: Co-Extruder (optional, not yet populated by backend grouping) */}
+              {mssqlDerived?.derived?.temperature_overview?.groups?.co && (
+                <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-slate-800">Co-Extruder</div>
+                    <div className="text-xs text-slate-500">
+                      Avg: <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.co.avg?.toFixed(1) ?? '--'}°C
+                      </span>{' '}
+                      · Spread:{' '}
+                      <span className="font-semibold text-slate-800">
+                        {mssqlDerived.derived.temperature_overview.groups.co.spread?.toFixed(1) ?? '--'}°C
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {mssqlDerived.derived.temperature_overview.groups.co.channels.map((ch: any) => (
+                      <div key={ch.key} className="flex items-baseline justify-between">
+                        <div className="text-xs text-slate-600">{ch.label}</div>
+                        <div className="text-lg">
+                          <span className="font-semibold text-slate-900">
+                            {typeof ch.value === 'number' ? ch.value.toFixed(1) : '--'}
+                          </span>
+                          <span className="text-xs text-slate-500 ml-1">°C</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
         </div>
 
         {(() => {
