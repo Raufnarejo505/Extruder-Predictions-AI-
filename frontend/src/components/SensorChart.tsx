@@ -411,18 +411,20 @@ export const SensorChart: React.FC<SensorChartProps> = ({
               stroke="#10b981"
               strokeWidth={2.5}
               dot={false}
+              activeDot={{ r: 5 }}
               connectNulls
               isAnimationActive={true}
               animationDuration={700}
               animationEasing="ease-out"
             />
-            {/* Red segment (out of baseline) – smooth transition, dots on peaks */}
+            {/* Red segment (out of baseline) – smooth line, highlight only on hover/click */}
             <Line
               type="monotone"
               dataKey="redSegment"
               stroke="#ef4444"
               strokeWidth={2.5}
-              dot={{ r: 3, stroke: '#ef4444', fill: '#ef4444' }}
+              dot={false}
+              activeDot={{ r: 5 }}
               connectNulls
               isAnimationActive={true}
               animationDuration={700}
