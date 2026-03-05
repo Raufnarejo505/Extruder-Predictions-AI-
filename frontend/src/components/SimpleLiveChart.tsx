@@ -96,6 +96,7 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
             <YAxis
               domain={yDomain}
               tick={{ fill: '#64748b', fontSize: 11 }}
+              tickFormatter={(value: number) => Number(value).toFixed(0)}
               label={{
                 value: unit,
                 angle: -90,
@@ -111,7 +112,7 @@ export const SimpleLiveChart: React.FC<SimpleLiveChartProps> = ({
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
               }}
               labelStyle={{ color: '#1e293b', fontWeight: '600' }}
-              formatter={(value: number) => [`${Number(value).toFixed(2)} ${unit}`, title]}
+              formatter={(value: number) => [`${Math.round(Number(value))} ${unit}`, title]}
             />
             <Line
               type="monotone"
